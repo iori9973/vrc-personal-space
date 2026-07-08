@@ -161,7 +161,8 @@ namespace PersonalSpace.Editor
         }
 
         /// <summary>Expression Menu(PS_Menu) を作り、MA Menu Installer で非破壊インストールする。</summary>
-        public static void GenerateMenu(VRCAvatarDescriptor avatar, bool enabledDefault)
+        public static void GenerateMenu(VRCAvatarDescriptor avatar, bool enabledDefault,
+                                        bool includePush, bool includeCloak)
         {
             EnsureFolder(GeneratedDir);
 
@@ -176,22 +177,28 @@ namespace PersonalSpace.Editor
             if (psMenu.controls == null)
                 psMenu.controls = new List<VRCExpressionsMenu.Control>();
 
-            if (!psMenu.controls.Exists(c => c.parameter != null && c.parameter.name == PEnabled))
+            // 押し出し系の項目（要 OSC アプリ・センサー）
+            if (includePush)
             {
-                psMenu.controls.Add(new VRCExpressionsMenu.Control
+                if (!psMenu.controls.Exists(c => c.parameter != null && c.parameter.name == PEnabled))
                 {
-                    name = "有効",
-                    type = VRCExpressionsMenu.Control.ControlType.Toggle,
-                    parameter = new VRCExpressionsMenu.Control.Parameter { name = PEnabled },
-                    value = 1f,
-                });
-                EditorUtility.SetDirty(psMenu);
+                    psMenu.controls.Add(new VRCExpressionsMenu.Control
+                    {
+                        name = "有効",
+                        type = VRCExpressionsMenu.Control.ControlType.Toggle,
+                        parameter = new VRCExpressionsMenu.Control.Parameter { name = PEnabled },
+                        value = 1f,
+                    });
+                    EditorUtility.SetDirty(psMenu);
+                }
+                AddRadial(psMenu, "反応範囲", PRange);
+                AddRadial(psMenu, "押し出しの強さ", PGain);
+                AddRadial(psMenu, "遅延補償の量", PLead);
+                AddToggle(psMenu, "範囲表示", PShowRange);
             }
-            AddRadial(psMenu, "反応範囲", PRange);
-            AddRadial(psMenu, "押し出しの強さ", PGain);
-            AddRadial(psMenu, "遅延補償の量", PLead);
-            AddToggle(psMenu, "範囲表示", PShowRange);
-            AddToggle(psMenu, "透明化", PCloak);
+            // 透明化（アバター単体・OSC 不要）
+            if (includeCloak)
+                AddToggle(psMenu, "透明化", PCloak);
 
             // 「Personal Space」サブメニューにまとめるラッパーを作る（root 直下が散らからないよう）
             string rootPath = GeneratedDir + "/PS_MenuRoot.asset";
@@ -220,19 +227,23 @@ namespace PersonalSpace.Editor
             PersonalSpaceMA.CleanupLegacyExprParams(avatar, "PS_");
             PersonalSpaceMA.CleanupLegacyMenu(avatar);
             PersonalSpaceMA.EnsureMenuInstaller(avatar, psRoot);
-            PersonalSpaceMA.UpsertParameter(avatar, PEnabled, ParameterSyncType.Bool,
-                localOnly: false, saved: true, def: enabledDefault ? 1f : 0f);
-            // 反応範囲/強さ/遅延補償量: ローカル(非同期)。既定 範囲1.0, 強さ0.5, 遅延補償0.5
-            PersonalSpaceMA.UpsertParameter(avatar, PRange, ParameterSyncType.Float,
-                localOnly: true, saved: true, def: 1.0f);
-            PersonalSpaceMA.UpsertParameter(avatar, PGain, ParameterSyncType.Float,
-                localOnly: true, saved: true, def: 0.5f);
-            PersonalSpaceMA.UpsertParameter(avatar, PLead, ParameterSyncType.Float,
-                localOnly: true, saved: true, def: 0.5f);
-            PersonalSpaceMA.UpsertParameter(avatar, PShowRange, ParameterSyncType.Bool,
-                localOnly: true, saved: true, def: 0f);
-            PersonalSpaceMA.UpsertParameter(avatar, PCloak, ParameterSyncType.Bool,
-                localOnly: false, saved: true, def: 0f);
+            if (includePush)
+            {
+                PersonalSpaceMA.UpsertParameter(avatar, PEnabled, ParameterSyncType.Bool,
+                    localOnly: false, saved: true, def: enabledDefault ? 1f : 0f);
+                // 反応範囲/強さ/遅延補償量: ローカル(非同期)。既定 範囲1.0, 強さ0.5, 遅延補償0.5
+                PersonalSpaceMA.UpsertParameter(avatar, PRange, ParameterSyncType.Float,
+                    localOnly: true, saved: true, def: 1.0f);
+                PersonalSpaceMA.UpsertParameter(avatar, PGain, ParameterSyncType.Float,
+                    localOnly: true, saved: true, def: 0.5f);
+                PersonalSpaceMA.UpsertParameter(avatar, PLead, ParameterSyncType.Float,
+                    localOnly: true, saved: true, def: 0.5f);
+                PersonalSpaceMA.UpsertParameter(avatar, PShowRange, ParameterSyncType.Bool,
+                    localOnly: true, saved: true, def: 0f);
+            }
+            if (includeCloak)
+                PersonalSpaceMA.UpsertParameter(avatar, PCloak, ParameterSyncType.Bool,
+                    localOnly: false, saved: true, def: 0f);
 
             AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
@@ -256,6 +267,9 @@ namespace PersonalSpace.Editor
                 AssetDatabase.DeleteAsset(RangeCtrlPath);
             if (AssetDatabase.LoadAssetAtPath<Material>(RangeMatPath) != null)
                 AssetDatabase.DeleteAsset(RangeMatPath);
+            string ringPath = GeneratedDir + "/PS_RingMesh.asset";
+            if (AssetDatabase.LoadAssetAtPath<Mesh>(ringPath) != null)
+                AssetDatabase.DeleteAsset(ringPath);
             if (AssetDatabase.LoadAssetAtPath<AnimatorController>(CloakCtrlPath) != null)
                 AssetDatabase.DeleteAsset(CloakCtrlPath);
         }
@@ -282,14 +296,14 @@ namespace PersonalSpace.Editor
 
             var mf = go.GetComponent<MeshFilter>();
             if (mf == null) mf = Undo.AddComponent<MeshFilter>(go);
-            mf.sharedMesh = GetCylinderMesh();
+            mf.sharedMesh = GetRingMesh();
             var mr = go.GetComponent<MeshRenderer>();
             if (mr == null) mr = Undo.AddComponent<MeshRenderer>(go);
             mr.sharedMaterial = GetRangeMaterial();
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             mr.receiveShadows = false;
 
-            // シリンダーは半径0.5なので半径R には scale.xz = 2R。実効範囲 R = maxRadius*(0.2+0.8*PS_Range)
+            // リングは外周半径0.5なので半径R には scale.xz = 2R。実効範囲 R = maxRadius*(0.2+0.8*PS_Range)
             float sMin = 2f * maxRadius * 0.2f;
             float sMax = 2f * maxRadius * 1.0f;
             const float flatY = 0.005f;
@@ -468,12 +482,48 @@ namespace PersonalSpace.Editor
             AssetDatabase.CreateAsset(clip, path);
         }
 
-        private static Mesh GetCylinderMesh()
+        // 足元に置く平たいリング(輪)メッシュを生成してアセット化する。
+        // 外周半径0.5・帯幅は外周の約12%。XZ平面に寝かせ、法線は上向き。
+        private static Mesh GetRingMesh()
         {
-            var temp = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            Mesh m = temp.GetComponent<MeshFilter>().sharedMesh;
-            Object.DestroyImmediate(temp);
-            return m;
+            string ringPath = GeneratedDir + "/PS_RingMesh.asset";
+            var existing = AssetDatabase.LoadAssetAtPath<Mesh>(ringPath);
+            if (existing != null) return existing;
+
+            const int seg = 64;      // 円周の分割数（滑らかさ）
+            const float outer = 0.5f;
+            const float inner = 0.44f;
+            var verts = new Vector3[seg * 2];
+            var norms = new Vector3[seg * 2];
+            var uvs = new Vector2[seg * 2];
+            var tris = new int[seg * 6];
+            for (int i = 0; i < seg; i++)
+            {
+                float a = 2f * Mathf.PI * i / seg;
+                float cx = Mathf.Cos(a), cz = Mathf.Sin(a);
+                verts[i * 2] = new Vector3(cx * outer, 0f, cz * outer);
+                verts[i * 2 + 1] = new Vector3(cx * inner, 0f, cz * inner);
+                norms[i * 2] = Vector3.up;
+                norms[i * 2 + 1] = Vector3.up;
+                uvs[i * 2] = new Vector2(i / (float)seg, 1f);
+                uvs[i * 2 + 1] = new Vector2(i / (float)seg, 0f);
+            }
+            for (int i = 0; i < seg; i++)
+            {
+                int o0 = i * 2, in0 = i * 2 + 1;
+                int o1 = ((i + 1) % seg) * 2, in1 = ((i + 1) % seg) * 2 + 1;
+                int t = i * 6;
+                tris[t] = o0; tris[t + 1] = in0; tris[t + 2] = o1;
+                tris[t + 3] = o1; tris[t + 4] = in0; tris[t + 5] = in1;
+            }
+            var mesh = new Mesh { name = "PS_RingMesh" };
+            mesh.vertices = verts;
+            mesh.normals = norms;
+            mesh.uv = uvs;
+            mesh.triangles = tris;
+            mesh.RecalculateBounds();
+            AssetDatabase.CreateAsset(mesh, ringPath);
+            return mesh;
         }
 
         private static Material GetRangeMaterial()

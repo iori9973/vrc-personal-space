@@ -32,8 +32,10 @@ namespace PersonalSpace.Editor
         private float _height = 0.9f;   // センサーの高さ(m) ＝ 概ね胴体
         private bool _sync = false;     // Expression Parameter を同期するか
 
-        // 遅延補償・メニュー（既定でオン。上級者は個別にオフ可）
-        private bool _includeOffset = true;   // リモート位置ズラし（遅延補償）を含める
+        // 機能の選択（それぞれ単体でも有効化できる）
+        private bool _includePush = true;     // 押し出し機能（要OSCアプリ・センサー）
+        private bool _includeOffset = true;   // 遅延補償（押し出しのサブ）
+        private bool _includeCloak = true;    // 透明化機能（アバター単体・OSC不要）
         private bool _includeMenu = true;     // Expression Menu を追加する
         private float _lead = 0.25f;          // 最大リード距離(m)
         private bool _enabledDefault = true;  // メニュー ON/OFF の初期値
@@ -67,21 +69,20 @@ namespace PersonalSpace.Editor
             _sync = EditorGUILayout.Toggle("パラメータを同期する", _sync);
 
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("オプション", EditorStyles.boldLabel);
-            _includeOffset = EditorGUILayout.Toggle("遅延補償を含める", _includeOffset);
-            using (new EditorGUI.DisabledScope(!_includeOffset))
+            EditorGUILayout.LabelField("機能（単体でも有効化可）", EditorStyles.boldLabel);
+            _includePush = EditorGUILayout.Toggle("押し出し機能（要OSCアプリ）", _includePush);
+            using (new EditorGUI.DisabledScope(!_includePush))
             {
-                _lead = EditorGUILayout.Slider("　最大リード距離 (m)", _lead, 0.05f, 0.6f);
+                _includeOffset = EditorGUILayout.Toggle("　遅延補償を含める", _includeOffset);
+                using (new EditorGUI.DisabledScope(!_includeOffset))
+                    _lead = EditorGUILayout.Slider("　　最大リード距離 (m)", _lead, 0.05f, 0.6f);
             }
-            _includeMenu = EditorGUILayout.Toggle("メニューを追加する", _includeMenu);
-            using (new EditorGUI.DisabledScope(!(_includeOffset || _includeMenu)))
-            {
-                _enabledDefault = EditorGUILayout.Toggle("　メニュー既定でON", _enabledDefault);
-            }
-            using (new EditorGUI.DisabledScope(!_includeMenu))
-            {
+            _includeCloak = EditorGUILayout.Toggle("透明化機能（近づかれたら消える）", _includeCloak);
+            using (new EditorGUI.DisabledScope(!_includeCloak))
                 _cloakDistance = EditorGUILayout.Slider("　透明化する距離 (m)", _cloakDistance, 0.2f, 1.5f);
-            }
+            _includeMenu = EditorGUILayout.Toggle("メニューを追加する", _includeMenu);
+            using (new EditorGUI.DisabledScope(!_includeMenu))
+                _enabledDefault = EditorGUILayout.Toggle("　メニュー既定でON", _enabledDefault);
 
             EditorGUILayout.Space();
             using (new EditorGUI.DisabledScope(_avatar == null))
@@ -100,23 +101,37 @@ namespace PersonalSpace.Editor
 
         private void Setup()
         {
-            Transform root = _avatar.transform.Find(RootName);
-            if (root == null)
-            {
-                var rootGo = new GameObject(RootName);
-                Undo.RegisterCreatedObjectUndo(rootGo, "Create PersonalSpace Sensors");
-                rootGo.transform.SetParent(_avatar.transform, false);
-                root = rootGo.transform;
-            }
-            root.localPosition = new Vector3(0f, _height, 0f);
-            root.localRotation = Quaternion.identity;
-            root.localScale = Vector3.one;
+            TearDown();  // まっさらにしてから、有効な機能だけを生成する
 
-            // センサー数を変えたとき古い子が残らないよう、一度作り直す。
-            for (int c = root.childCount - 1; c >= 0; c--)
+            if (_includePush)
             {
-                Undo.DestroyObjectImmediate(root.GetChild(c).gameObject);
+                CreateSensors();
+                AddParameters();
+                if (_includeOffset)
+                    PersonalSpaceRemote.GenerateOffset(_avatar, _lead, _enabledDefault);
             }
+            if (_includeCloak)
+                PersonalSpaceRemote.GenerateCloak(_avatar, _cloakDistance);
+            if (_includeMenu && (_includePush || _includeCloak))
+            {
+                PersonalSpaceRemote.GenerateMenu(_avatar, _enabledDefault, _includePush, _includeCloak);
+                if (_includePush)
+                    PersonalSpaceRemote.GenerateRangeViz(_avatar, _radius);
+            }
+
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[PersonalSpace] セットアップ完了: {_avatar.name} "
+                      + (_includePush ? "押し出し " : "") + (_includeCloak ? "透明化 " : ""));
+        }
+
+        // 放射状に N 個の Contact Receiver(縦カプセル・Proximity) を生成する
+        private void CreateSensors()
+        {
+            var rootGo = new GameObject(RootName);
+            Undo.RegisterCreatedObjectUndo(rootGo, "Create PersonalSpace Sensors");
+            rootGo.transform.SetParent(_avatar.transform, false);
+            Transform root = rootGo.transform;
+            root.localPosition = new Vector3(0f, _height, 0f);
 
             for (int i = 0; i < _sensorCount; i++)
             {
@@ -128,40 +143,22 @@ namespace PersonalSpace.Editor
                 Undo.RegisterCreatedObjectUndo(childGo, "Create PersonalSpace sensor");
                 childGo.transform.SetParent(root, false);
                 childGo.transform.localPosition = dir * _offset;
-                childGo.transform.localRotation = Quaternion.identity;
-                childGo.transform.localScale = Vector3.one;
 
                 var recv = Undo.AddComponent<VRCContactReceiver>(childGo);
-                // 縦カプセルにすることで、身長差があっても水平距離だけで検知できる
-                // （高さ方向のすり抜けを防ぐ）。radius=水平の反応範囲、height=縦の被覆。
+                // 縦カプセルで身長差があっても水平距離だけで検知（高さ方向のすり抜け防止）
                 recv.shapeType = ContactBase.ShapeType.Capsule;
                 recv.radius = _radius;
-                recv.height = 3.0f;       // 概ね 地面〜2.4m を覆う（センサー中心 _height 基準）
+                recv.height = 3.0f;
                 recv.position = Vector3.zero;
-                recv.rotation = Quaternion.identity;  // ローカル Y(上) 方向に伸びる
+                recv.rotation = Quaternion.identity;
                 recv.receiverType = ContactReceiver.ReceiverType.Proximity;
                 recv.parameter = ParamPrefix + i;
                 recv.collisionTags = new List<string>(BodyTags);
-                recv.allowSelf = false;   // 自分の手足では反応しない
-                recv.allowOthers = true;  // 他人を検知する
-                recv.localOnly = true;    // 自分のクライアントでのみ評価（ランク非計上）
+                recv.allowSelf = false;
+                recv.allowOthers = true;
+                recv.localOnly = true;
                 EditorUtility.SetDirty(recv);
             }
-
-            AddParameters();
-
-            // 遅延補償・メニューも一括生成（オプションでオフ可）
-            if (_includeOffset)
-                PersonalSpaceRemote.GenerateOffset(_avatar, _lead, _enabledDefault);
-            if (_includeMenu)
-            {
-                PersonalSpaceRemote.GenerateMenu(_avatar, _enabledDefault);
-                PersonalSpaceRemote.GenerateRangeViz(_avatar, _radius);
-                PersonalSpaceRemote.GenerateCloak(_avatar, _cloakDistance);
-            }
-
-            Debug.Log($"[PersonalSpace] セットアップ完了: {_avatar.name} ({_sensorCount}方向"
-                      + (_includeOffset ? "・遅延補償" : "") + (_includeMenu ? "・メニュー" : "") + ")");
         }
 
         // Modular Avatar 経由でセンサーパラメータ PS_0…PS_{N-1} を注入する
@@ -194,12 +191,16 @@ namespace PersonalSpace.Editor
 
         private void RemoveSetup()
         {
+            TearDown();
+            AssetDatabase.SaveAssets();
+            Debug.Log("[PersonalSpace] 削除しました: " + _avatar.name);
+        }
+
+        // 生成物を丸ごと除去してまっさらにする（Setup 冒頭でも呼ぶ）
+        private void TearDown()
+        {
             Transform root = _avatar.transform.Find(RootName);
-            if (root != null)
-            {
-                Undo.DestroyObjectImmediate(root.gameObject);
-            }
-            // 範囲表示メッシュ・近接センサー(アバター直下)を除去
+            if (root != null) Undo.DestroyObjectImmediate(root.gameObject);
             Transform rangeViz = _avatar.transform.Find("PS_RangeViz");
             if (rangeViz != null) Undo.DestroyObjectImmediate(rangeViz.gameObject);
             Transform nearSensor = _avatar.transform.Find("PS_NearSensor");
@@ -211,8 +212,6 @@ namespace PersonalSpace.Editor
             // 旧方式で直接編集した Expression Parameters / Menu の残骸も掃除
             PersonalSpaceMA.CleanupLegacyExprParams(_avatar, ParamPrefix);
             PersonalSpaceMA.CleanupLegacyMenu(_avatar);
-            AssetDatabase.SaveAssets();
-            Debug.Log("[PersonalSpace] 削除しました: " + _avatar.name);
         }
     }
 }
