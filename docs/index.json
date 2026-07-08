@@ -5,6 +5,26 @@
   "packages": {
     "com.vrc-personal-space": {
       "versions": {
+        "0.4.1": {
+          "name": "com.vrc-personal-space",
+          "version": "0.4.1",
+          "displayName": "Personal Space",
+          "description": "他プレーヤーが一定距離より近づくと、自分だけが相手から離れてパーソナルスペースを保つ VRChat 用ツール。アバターの Contacts で接近を検知し、付属の OSC アプリで自動回避する。",
+          "unity": "2022.3",
+          "type": "tool",
+          "author": {
+            "name": "iori9973",
+            "url": "https://github.com/iori9973"
+          },
+          "url": "https://github.com/iori9973/vrc-personal-space/releases/download/v0.4.1/vrc-personal-space-0.4.1.zip",
+          "changelogUrl": "https://github.com/iori9973/vrc-personal-space/blob/main/CHANGELOG.md",
+          "dependencies": {},
+          "vpmDependencies": {
+            "com.vrchat.avatars": ">=3.5.0",
+            "nadena.dev.modular-avatar": ">=1.10.0"
+          },
+          "zipSHA256": "ca71fbc0899442e0ee8e275f53dd38fc0b92930f3871236ed91d86ef37c31e23"
+        },
         "0.4.0": {
           "name": "com.vrc-personal-space",
           "version": "0.4.0",
