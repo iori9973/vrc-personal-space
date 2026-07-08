@@ -27,8 +27,8 @@ namespace PersonalSpace.Editor
     public class PersonalSpaceSetupWindow : EditorWindow
     {
         private VRCAvatarDescriptor _avatar;
-        private int _sensorCount = 8;   // 方向センサーの数 (4〜16 推奨)
-        private float _radius = 1.0f;   // 反応半径(m)
+        private int _sensorCount = 16;  // 方向センサーの数 (4〜16 推奨)
+        private float _radius = 1.5f;   // 反応半径(m) ＝ メニュー「反応範囲」の最大値
         private float _offset = 0.4f;   // 各センサーの中心オフセット(m)
         private float _height = 0.9f;   // センサーの高さ(m) ＝ 概ね胴体
         private bool _sync = false;     // Expression Parameter を同期するか
@@ -55,7 +55,7 @@ namespace PersonalSpace.Editor
                 "Avatar", _avatar, typeof(VRCAvatarDescriptor), true);
 
             _sensorCount = EditorGUILayout.IntSlider("方向センサー数", _sensorCount, 4, 16);
-            _radius = EditorGUILayout.FloatField("反応半径 (m)", _radius);
+            _radius = EditorGUILayout.FloatField("最大反応半径 (m)", _radius);
             _offset = EditorGUILayout.FloatField("センサーオフセット (m)", _offset);
             _height = EditorGUILayout.FloatField("センサー高さ (m)", _height);
             _sync = EditorGUILayout.Toggle("パラメータを同期する", _sync);
@@ -70,6 +70,7 @@ namespace PersonalSpace.Editor
             EditorGUILayout.HelpBox(
                 $"PS_0 … PS_{_sensorCount - 1} (Float) を Expression Parameters に追加します。\n" +
                 "常駐アプリは同じセンサー数で起動してください: python personal_space.py --sensors " + _sensorCount + "\n" +
+                "最大反応半径 = メニュー「反応範囲」の上限。実行時はメニューでこの範囲内に縮められます。\n" +
                 "Local Only のため PC のパフォーマンスランクには計上されません。\n" +
                 "通常は「同期する」OFF でも OSC 出力されます。届かない場合のみ ON で再セットアップ。",
                 MessageType.Info);

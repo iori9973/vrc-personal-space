@@ -68,7 +68,7 @@ def _discover_vrchat_input(timeout=3.0):
 
 def main():
     ap = argparse.ArgumentParser(description="VRChat personal-space keeper (OSC)")
-    ap.add_argument("--sensors", type=int, default=8, help="センサー数(Editor と一致させる)")
+    ap.add_argument("--sensors", type=int, default=16, help="センサー数(Editor と一致させる)")
     ap.add_argument("--no-oscquery", action="store_true", help="OSCQuery を使わず固定ポート")
     ap.add_argument("--listen-port", type=int, default=9001, help="固定モードの受信ポート")
     ap.add_argument("--send-ip", default="127.0.0.1")
@@ -113,11 +113,30 @@ def main():
         with lock:
             enabled["v"] = bool(osc_args[0])
 
+    # メニュー(Radial)からの実行時調整。None = 未受信(=CLI 既定を使う)。
+    tuning = {"range": None, "gain": None, "lead": None}
+
+    def make_tuning_handler(key):
+        def handler(_address, *osc_args):
+            if not osc_args:
+                return
+            try:
+                value = float(osc_args[0])
+            except (TypeError, ValueError):
+                return
+            with lock:
+                tuning[key] = value
+        return handler
+
     dispatcher = Dispatcher()
     for i in range(n):
         dispatcher.map(f"/avatar/parameters/PS_{i}", make_handler(i))
     # メニュー ON/OFF (Expression Menu の PS_Enabled) を購読して全体を停止できるように
     dispatcher.map("/avatar/parameters/PS_Enabled", enabled_handler)
+    # メニュー Radial: 反応範囲 / 押し出しの強さ / 遅延補償の量
+    dispatcher.map("/avatar/parameters/PS_Range", make_tuning_handler("range"))
+    dispatcher.map("/avatar/parameters/PS_Gain", make_tuning_handler("gain"))
+    dispatcher.map("/avatar/parameters/PS_Lead", make_tuning_handler("lead"))
 
     use_oscquery = _OSCQUERY_AVAILABLE and not args.no_oscquery
     service = None  # 参照を保持して GC/広告停止を防ぐ
@@ -168,6 +187,16 @@ def main():
             with lock:
                 values = list(state)
                 is_enabled = enabled["v"]
+                t_range, t_gain, t_lead = tuning["range"], tuning["gain"], tuning["lead"]
+
+            # メニュー値を実効値に変換(未受信なら CLI 既定)。
+            # 反応範囲: PS_Range 0..1 を近接度しきい値に。物理半径は最大のまま、
+            #           近接度が cutoff 以下のセンサーを無視して実効範囲を縮める。
+            #           range=1 → cutoff 0(物理半径いっぱい), range=0 → cutoff 0.8(最小)。
+            rng = t_range if t_range is not None else 1.0
+            cutoff = 1.0 - (0.2 + 0.8 * rng)
+            gain = (3.0 * t_gain) if t_gain is not None else args.gain
+            lead = (2.0 * t_lead) if t_lead is not None else args.lead
 
             # メニューで OFF のときは移動もオフセットも止め、入力を 0 に戻す。
             if not is_enabled:
@@ -183,18 +212,21 @@ def main():
                 continue
 
             # 全センサーの逃走ベクトルを近さで重み付けして合成。
+            # cutoff 以下(=遠い)のセンサーは無視し、残りを 0..1 に再マップ。
             ex = ez = 0.0
+            denom = 1.0 - cutoff
             for i in range(n):
                 w = values[i]
-                if w <= 0.0:
+                if w <= cutoff or denom <= 0.0:
                     continue
+                w = (w - cutoff) / denom
                 dx, dz = escape_dirs[i]
                 ex += dx * w
                 ez += dz * w
 
             # ez=前後(前が近い→後退で負), ex=左右(右が近い→左へで負)。
-            v = _clamp(ez * args.gain, -1.0, 1.0)
-            h = _clamp(ex * args.gain, -1.0, 1.0)
+            v = _clamp(ez * gain, -1.0, 1.0)
+            h = _clamp(ex * gain, -1.0, 1.0)
             if args.invert_v:
                 v = -v
             if args.invert_h:
@@ -213,8 +245,8 @@ def main():
             # リモート位置ズラし(遅延補償): 逃走方向をアバター相対のオフセットとして同期送信。
             # 入力の反転フラグとは無関係(アバターローカル空間で適用されるため raw の ex/ez を使う)。
             if send_offset:
-                ox = _clamp(ex * args.lead, -1.0, 1.0)
-                oz = _clamp(ez * args.lead, -1.0, 1.0)
+                ox = _clamp(ex * lead, -1.0, 1.0)
+                oz = _clamp(ez * lead, -1.0, 1.0)
                 ox_s = ox_s * smooth + ox * (1.0 - smooth)
                 oz_s = oz_s * smooth + oz * (1.0 - smooth)
                 px = 0.0 if abs(ox_s) < args.deadzone else ox_s

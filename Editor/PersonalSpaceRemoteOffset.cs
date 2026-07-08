@@ -38,6 +38,11 @@ namespace PersonalSpace.Editor
         private const string POffZ = "PS_OffZ";
         private const string PEnabled = "PS_Enabled";
 
+        // メニュー(Radial)で実行時調整する値。ローカルのみ効くので非同期。
+        private const string PRange = "PS_Range";  // 反応範囲
+        private const string PGain = "PS_Gain";    // 押し出しの強さ
+        private const string PLead = "PS_Lead";    // 遅延補償の量
+
         [MenuItem("Tools/Personal Space/Remote Offset (遅延補償)")]
         public static void Open()
         {
@@ -276,6 +281,12 @@ namespace PersonalSpace.Editor
                 EditorUtility.SetDirty(psMenu);
             }
 
+            // Radial 用パラメータを用意し、メニューに Radial を追加
+            AddMenuTuningParams();
+            AddRadial(psMenu, "反応範囲", PRange);
+            AddRadial(psMenu, "押し出しの強さ", PGain);
+            AddRadial(psMenu, "遅延補償の量", PLead);
+
             // アバターのルートメニューに「Personal Space」サブメニューを差し込む
             VRCExpressionsMenu root = _avatar.expressionsMenu;
             if (root == null)
@@ -314,6 +325,44 @@ namespace PersonalSpace.Editor
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
         }
 
+        // Radial 用の非同期パラメータ(反応範囲/強さ/遅延補償量)を Expression Parameters に追加。
+        private void AddMenuTuningParams()
+        {
+            VRCExpressionParameters vp = _avatar.expressionParameters;
+            if (vp == null) return; // AddSyncedParameters で必ず作られている前提
+            var list = new List<VRCExpressionParameters.Parameter>(
+                vp.parameters ?? new VRCExpressionParameters.Parameter[0]);
+
+            // 既定: 範囲=最大(1.0), 強さ=中(0.5→gain1.5), 遅延補償=中(0.5→lead1.0)
+            Upsert(list, PRange, VRCExpressionParameters.ValueType.Float, 1.0f, saved: true, synced: false);
+            Upsert(list, PGain, VRCExpressionParameters.ValueType.Float, 0.5f, saved: true, synced: false);
+            Upsert(list, PLead, VRCExpressionParameters.ValueType.Float, 0.5f, saved: true, synced: false);
+
+            vp.parameters = list.ToArray();
+            EditorUtility.SetDirty(vp);
+        }
+
+        private static void AddRadial(VRCExpressionsMenu menu, string label, string param)
+        {
+            if (menu.controls.Exists(c =>
+                c.type == VRCExpressionsMenu.Control.ControlType.RadialPuppet &&
+                c.subParameters != null && c.subParameters.Length > 0 &&
+                c.subParameters[0] != null && c.subParameters[0].name == param))
+            {
+                return;
+            }
+            menu.controls.Add(new VRCExpressionsMenu.Control
+            {
+                name = label,
+                type = VRCExpressionsMenu.Control.ControlType.RadialPuppet,
+                subParameters = new[]
+                {
+                    new VRCExpressionsMenu.Control.Parameter { name = param },
+                },
+            });
+            EditorUtility.SetDirty(menu);
+        }
+
         private void Remove()
         {
             if (AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath) != null)
@@ -325,7 +374,8 @@ namespace PersonalSpace.Editor
             if (vp != null && vp.parameters != null)
             {
                 var list = new List<VRCExpressionParameters.Parameter>(vp.parameters);
-                list.RemoveAll(p => p.name == POffX || p.name == POffZ || p.name == PEnabled);
+                list.RemoveAll(p => p.name == POffX || p.name == POffZ || p.name == PEnabled
+                                    || p.name == PRange || p.name == PGain || p.name == PLead);
                 vp.parameters = list.ToArray();
                 EditorUtility.SetDirty(vp);
                 AssetDatabase.SaveAssets();
