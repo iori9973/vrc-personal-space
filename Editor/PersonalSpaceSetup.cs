@@ -37,6 +37,7 @@ namespace PersonalSpace.Editor
         private bool _includeMenu = true;     // Expression Menu を追加する
         private float _lead = 0.25f;          // 最大リード距離(m)
         private bool _enabledDefault = true;  // メニュー ON/OFF の初期値
+        private float _cloakDistance = 0.6f;  // 透明化する接近距離(m)
 
         private const string RootName = "PersonalSpaceSensors";
         private const string ParamPrefix = "PS_";
@@ -76,6 +77,10 @@ namespace PersonalSpace.Editor
             using (new EditorGUI.DisabledScope(!(_includeOffset || _includeMenu)))
             {
                 _enabledDefault = EditorGUILayout.Toggle("　メニュー既定でON", _enabledDefault);
+            }
+            using (new EditorGUI.DisabledScope(!_includeMenu))
+            {
+                _cloakDistance = EditorGUILayout.Slider("　透明化する距離 (m)", _cloakDistance, 0.2f, 1.5f);
             }
 
             EditorGUILayout.Space();
@@ -152,6 +157,7 @@ namespace PersonalSpace.Editor
             {
                 PersonalSpaceRemote.GenerateMenu(_avatar, _enabledDefault);
                 PersonalSpaceRemote.GenerateRangeViz(_avatar, _radius);
+                PersonalSpaceRemote.GenerateCloak(_avatar, _cloakDistance);
             }
 
             Debug.Log($"[PersonalSpace] セットアップ完了: {_avatar.name} ({_sensorCount}方向"
@@ -193,9 +199,11 @@ namespace PersonalSpace.Editor
             {
                 Undo.DestroyObjectImmediate(root.gameObject);
             }
-            // 範囲表示メッシュ(アバター直下)を除去
+            // 範囲表示メッシュ・近接センサー(アバター直下)を除去
             Transform rangeViz = _avatar.transform.Find("PS_RangeViz");
             if (rangeViz != null) Undo.DestroyObjectImmediate(rangeViz.gameObject);
+            Transform nearSensor = _avatar.transform.Find("PS_NearSensor");
+            if (nearSensor != null) Undo.DestroyObjectImmediate(nearSensor.gameObject);
             // MA 統合オブジェクト(PS_ModularAvatar)をコンポーネントごと丸ごと除去
             PersonalSpaceMA.RemoveAll(_avatar);
             // 生成アセット(Controller/クリップ/メニュー)を削除

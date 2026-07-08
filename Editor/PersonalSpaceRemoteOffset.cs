@@ -5,8 +5,10 @@ using nadena.dev.modular_avatar.core;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using VRC.Dynamics;
 using VRC.SDK3.Avatars.Components;
 using VRC.SDK3.Avatars.ScriptableObjects;
+using VRC.SDK3.Dynamics.Contact.Components;
 
 namespace PersonalSpace.Editor
 {
@@ -43,6 +45,15 @@ namespace PersonalSpace.Editor
         private const string RangeMatPath = GeneratedDir + "/PS_RangeViz.mat";
         private const string RangeObj = "PS_RangeViz";   // アバター直下の表示メッシュ
         private const string PShowRange = "PS_ShowRange"; // 範囲表示 ON/OFF
+
+        // 透明化モード（近づかれたら他人視点で自分が消える）
+        private const string CloakCtrlPath = GeneratedDir + "/PS_Cloak.controller";
+        private const string NearObj = "PS_NearSensor";   // 近接検知用の受信機
+        private const string PNear = "PS_Near";           // 一定内に誰かいる(同期Bool)
+        private const string PCloak = "PS_CloakMode";     // 透明化モード ON/OFF(同期Bool)
+
+        // 全ヒューマノイドに自動生成される Contact Sender のタグ
+        private static readonly string[] BodyTags = { "Head", "Torso", "Hand", "Foot", "Finger" };
 
         /// <summary>遅延補償の Controller を生成し、MA Merge Animator と同期パラメータを注入する。</summary>
         public static void GenerateOffset(VRCAvatarDescriptor avatar, float lead, bool enabledDefault)
@@ -180,6 +191,7 @@ namespace PersonalSpace.Editor
             AddRadial(psMenu, "押し出しの強さ", PGain);
             AddRadial(psMenu, "遅延補償の量", PLead);
             AddToggle(psMenu, "範囲表示", PShowRange);
+            AddToggle(psMenu, "透明化", PCloak);
 
             // 「Personal Space」サブメニューにまとめるラッパーを作る（root 直下が散らからないよう）
             string rootPath = GeneratedDir + "/PS_MenuRoot.asset";
@@ -219,6 +231,8 @@ namespace PersonalSpace.Editor
                 localOnly: true, saved: true, def: 0.5f);
             PersonalSpaceMA.UpsertParameter(avatar, PShowRange, ParameterSyncType.Bool,
                 localOnly: true, saved: true, def: 0f);
+            PersonalSpaceMA.UpsertParameter(avatar, PCloak, ParameterSyncType.Bool,
+                localOnly: false, saved: true, def: 0f);
 
             AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
@@ -242,6 +256,8 @@ namespace PersonalSpace.Editor
                 AssetDatabase.DeleteAsset(RangeCtrlPath);
             if (AssetDatabase.LoadAssetAtPath<Material>(RangeMatPath) != null)
                 AssetDatabase.DeleteAsset(RangeMatPath);
+            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(CloakCtrlPath) != null)
+                AssetDatabase.DeleteAsset(CloakCtrlPath);
         }
 
         /// <summary>足元に反応範囲を示す半透明ディスクを生成し、PS_Range に連動させる（ローカル表示）。</summary>
@@ -332,6 +348,121 @@ namespace PersonalSpace.Editor
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             Debug.Log("[PersonalSpace] 範囲表示を生成しました: " + RangeCtrlPath);
+        }
+
+        /// <summary>透明化モード: 一定内に近づかれたら他人視点で自分のメッシュを非表示にする。</summary>
+        public static void GenerateCloak(VRCAvatarDescriptor avatar, float cloakDistance)
+        {
+            EnsureFolder(GeneratedDir);
+            EnsureFolder(AnimDir);
+
+            // 近接検知の受信機(PS_NearSensor)。Constant型で「一定内に誰かいる」を PS_Near(同期)に。
+            Transform ns = avatar.transform.Find(NearObj);
+            GameObject nso = ns != null ? ns.gameObject : null;
+            if (nso == null)
+            {
+                nso = new GameObject(NearObj);
+                Undo.RegisterCreatedObjectUndo(nso, "Create " + NearObj);
+                nso.transform.SetParent(avatar.transform, false);
+            }
+            nso.transform.localPosition = new Vector3(0f, 0.9f, 0f);
+            nso.transform.localRotation = Quaternion.identity;
+            nso.transform.localScale = Vector3.one;
+            var recv = nso.GetComponent<VRCContactReceiver>() ?? Undo.AddComponent<VRCContactReceiver>(nso);
+            recv.shapeType = ContactBase.ShapeType.Capsule;
+            recv.radius = cloakDistance;
+            recv.height = 3.0f;
+            recv.position = Vector3.zero;
+            recv.rotation = Quaternion.identity;
+            recv.receiverType = ContactReceiver.ReceiverType.Constant; // 0/1
+            recv.parameter = PNear;
+            recv.collisionTags = new List<string>(BodyTags);
+            recv.allowSelf = false;
+            recv.allowOthers = true;
+            // Local Only を OFF にする。ON だと PS_Near が同期されず他人視点で消せないため。
+            // （所有者の検知結果が同期パラメータ経由で全リモートへ伝わる。受信機1個なのでランク影響は軽微）
+            recv.localOnly = false;
+            EditorUtility.SetDirty(recv);
+
+            // アバターの全 Renderer を列挙して 表示/非表示 クリップを作る（PS_ 自前オブジェクトは除外）
+            var visible = new AnimationClip { name = "PS_Cloak_Visible" };
+            var hidden = new AnimationClip { name = "PS_Cloak_Hidden" };
+            foreach (Renderer r in avatar.GetComponentsInChildren<Renderer>(true))
+            {
+                if (IsUnderPSObject(r.transform, avatar.transform)) continue;
+                string path = AnimationUtility.CalculateTransformPath(r.transform, avatar.transform);
+                System.Type rt = r.GetType();
+                SetConstantTyped(visible, path, rt, "m_Enabled", 1f);
+                SetConstantTyped(hidden, path, rt, "m_Enabled", 0f);
+            }
+            SaveClipAsset(visible, "PS_Cloak_Visible");
+            SaveClipAsset(hidden, "PS_Cloak_Hidden");
+
+            if (File.Exists(CloakCtrlPath)) AssetDatabase.DeleteAsset(CloakCtrlPath);
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(CloakCtrlPath);
+            controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
+            controller.AddParameter(PCloak, AnimatorControllerParameterType.Bool);
+            controller.AddParameter(PNear, AnimatorControllerParameterType.Bool);
+
+            AnimatorControllerLayer[] layers = controller.layers;
+            layers[0].name = "PS_Cloak";
+            controller.layers = layers;
+            AnimatorStateMachine sm = controller.layers[0].stateMachine;
+
+            var visState = sm.AddState("Visible");
+            visState.motion = visible;
+            sm.defaultState = visState;
+            var hidState = sm.AddState("Hidden");
+            hidState.motion = hidden;
+
+            // Visible -> Hidden : 透明化ON かつ 近い かつ 他人視点
+            var toHide = visState.AddTransition(hidState);
+            toHide.hasExitTime = false; toHide.duration = 0f;
+            toHide.AddCondition(AnimatorConditionMode.If, 0f, PCloak);
+            toHide.AddCondition(AnimatorConditionMode.If, 0f, PNear);
+            toHide.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsLocal");
+            // Hidden -> Visible : いずれか解除
+            var s1 = hidState.AddTransition(visState);
+            s1.hasExitTime = false; s1.duration = 0f;
+            s1.AddCondition(AnimatorConditionMode.IfNot, 0f, PCloak);
+            var s2 = hidState.AddTransition(visState);
+            s2.hasExitTime = false; s2.duration = 0f;
+            s2.AddCondition(AnimatorConditionMode.IfNot, 0f, PNear);
+            var s3 = hidState.AddTransition(visState);
+            s3.hasExitTime = false; s3.duration = 0f;
+            s3.AddCondition(AnimatorConditionMode.If, 0f, "IsLocal");
+
+            EditorUtility.SetDirty(controller);
+
+            PersonalSpaceMA.EnsureMergeAnimator(avatar, controller);
+            PersonalSpaceMA.UpsertParameter(avatar, PNear, ParameterSyncType.Bool,
+                localOnly: false, saved: false, def: 0f);
+            PersonalSpaceMA.UpsertParameter(avatar, PCloak, ParameterSyncType.Bool,
+                localOnly: false, saved: true, def: 0f);
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            Debug.Log("[PersonalSpace] 透明化モードを生成しました: " + CloakCtrlPath);
+        }
+
+        // r の Transform が PS_ 自前オブジェクト配下かどうか
+        private static bool IsUnderPSObject(Transform t, Transform avatarRoot)
+        {
+            for (Transform p = t; p != null && p != avatarRoot; p = p.parent)
+            {
+                string n = p.name;
+                if (n == "PS_ModularAvatar" || n == "PersonalSpaceSensors" ||
+                    n == RangeObj || n == NearObj)
+                    return true;
+            }
+            return false;
+        }
+
+        private static void SaveClipAsset(AnimationClip clip, string clipName)
+        {
+            string path = AnimDir + "/" + clipName + ".anim";
+            if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
+            AssetDatabase.CreateAsset(clip, path);
         }
 
         private static Mesh GetCylinderMesh()
