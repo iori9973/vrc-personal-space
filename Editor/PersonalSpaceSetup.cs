@@ -32,6 +32,12 @@ namespace PersonalSpace.Editor
         private float _height = 0.9f;   // センサーの高さ(m) ＝ 概ね胴体
         private bool _sync = false;     // Expression Parameter を同期するか
 
+        // 遅延補償・メニュー（既定でオン。上級者は個別にオフ可）
+        private bool _includeOffset = true;   // リモート位置ズラし（遅延補償）を含める
+        private bool _includeMenu = true;     // Expression Menu を追加する
+        private float _lead = 0.25f;          // 最大リード距離(m)
+        private bool _enabledDefault = true;  // メニュー ON/OFF の初期値
+
         private const string RootName = "PersonalSpaceSensors";
         private const string ParamPrefix = "PS_";
 
@@ -60,6 +66,19 @@ namespace PersonalSpace.Editor
             _sync = EditorGUILayout.Toggle("パラメータを同期する", _sync);
 
             EditorGUILayout.Space();
+            EditorGUILayout.LabelField("オプション", EditorStyles.boldLabel);
+            _includeOffset = EditorGUILayout.Toggle("遅延補償を含める", _includeOffset);
+            using (new EditorGUI.DisabledScope(!_includeOffset))
+            {
+                _lead = EditorGUILayout.Slider("　最大リード距離 (m)", _lead, 0.05f, 0.6f);
+            }
+            _includeMenu = EditorGUILayout.Toggle("メニューを追加する", _includeMenu);
+            using (new EditorGUI.DisabledScope(!(_includeOffset || _includeMenu)))
+            {
+                _enabledDefault = EditorGUILayout.Toggle("　メニュー既定でON", _enabledDefault);
+            }
+
+            EditorGUILayout.Space();
             using (new EditorGUI.DisabledScope(_avatar == null))
             {
                 if (GUILayout.Button("セットアップ / 更新")) Setup();
@@ -67,11 +86,10 @@ namespace PersonalSpace.Editor
             }
 
             EditorGUILayout.HelpBox(
-                $"PS_0 … PS_{_sensorCount - 1} (Float) を Expression Parameters に追加します。\n" +
-                "常駐アプリは同じセンサー数で起動してください: python personal_space.py --sensors " + _sensorCount + "\n" +
-                "最大反応半径 = メニュー「反応範囲」の上限。実行時はメニューでこの範囲内に縮められます。\n" +
-                "Local Only のため PC のパフォーマンスランクには計上されません。\n" +
-                "通常は「同期する」OFF でも OSC 出力されます。届かない場合のみ ON で再セットアップ。",
+                "1ボタンで センサー＋遅延補償＋メニュー を一括生成します（Modular Avatar 経由）。\n" +
+                $"常駐アプリは同じセンサー数で起動: python personal_space.py --sensors {_sensorCount}\n" +
+                "最大反応半径 = メニュー「反応範囲」の上限。実行時にこの範囲内で縮められます。\n" +
+                "センサーは Local Only でランク非計上。FaceEmo 等の NDMF 系ツールと共存できます。",
                 MessageType.Info);
         }
 
@@ -123,7 +141,15 @@ namespace PersonalSpace.Editor
             }
 
             AddParameters();
-            Debug.Log($"[PersonalSpace] セットアップ完了: {_avatar.name} ({_sensorCount}方向)");
+
+            // 遅延補償・メニューも一括生成（オプションでオフ可）
+            if (_includeOffset)
+                PersonalSpaceRemote.GenerateOffset(_avatar, _lead, _enabledDefault);
+            if (_includeMenu)
+                PersonalSpaceRemote.GenerateMenu(_avatar, _enabledDefault);
+
+            Debug.Log($"[PersonalSpace] セットアップ完了: {_avatar.name} ({_sensorCount}方向"
+                      + (_includeOffset ? "・遅延補償" : "") + (_includeMenu ? "・メニュー" : "") + ")");
         }
 
         // Modular Avatar 経由でセンサーパラメータ PS_0…PS_{N-1} を注入する
@@ -161,8 +187,11 @@ namespace PersonalSpace.Editor
             {
                 Undo.DestroyObjectImmediate(root.gameObject);
             }
+            // 遅延補償・メニュー分も除去
+            PersonalSpaceRemote.Remove(_avatar);
             // 旧方式の残骸掃除 ＋ MA 側のセンサーパラメータ削除
             PersonalSpaceMA.CleanupLegacyExprParams(_avatar, ParamPrefix);
+            PersonalSpaceMA.CleanupLegacyMenu(_avatar);
             PersonalSpaceMA.RemoveParametersMatching(_avatar, IsSensorParamName);
             PersonalSpaceMA.DestroyRootIfEmpty(_avatar);
             AssetDatabase.SaveAssets();

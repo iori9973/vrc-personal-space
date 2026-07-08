@@ -11,26 +11,20 @@ using VRC.SDK3.Avatars.ScriptableObjects;
 namespace PersonalSpace.Editor
 {
     /// <summary>
-    /// リモート位置ズラし(遅延補償)用の Animator を生成する Editor 拡張。
+    /// リモート位置ズラし(遅延補償)用の Animator とメニューを生成する静的ヘルパー。
+    /// （Setup ウィンドウから一括で呼ばれる。単体のウィンドウは持たない）
     ///
     /// 仕組み:
     ///  - 常駐アプリが逃走方向を同期パラメータ PS_OffX / PS_OffZ (-1〜1) として送る。
     ///  - リモート(他プレーヤー視点 = IsLocal:false)でのみ、Armature の localPosition を
     ///    2D BlendTree で最大 lead(m) だけオフセットし、「先回りして避けている」ように見せる。
     ///  - ローカル(自分視点 = IsLocal:true)ではオフセットしない(実際に /input で動くため)。
-    ///  - 逃げるのを止めるとパラメータが 0 に戻り、実同期位置が追いついてオフセットも消える。
     ///
-    /// 生成した AnimatorController・メニュー・パラメータは Modular Avatar 経由で非破壊注入する
-    /// (PersonalSpaceMA)。FaceEmo など NDMF 系ツールと共存できる。手動の Merge 設定は不要。
-    ///
+    /// 生成物は Modular Avatar 経由で非破壊注入する(PersonalSpaceMA)。FaceEmo 等と共存できる。
     /// ※Unity 外で自動テストできないため、生成物はエディタ上での動作確認が必要。
     /// </summary>
-    public class PersonalSpaceRemoteOffsetWindow : EditorWindow
+    internal static class PersonalSpaceRemote
     {
-        private VRCAvatarDescriptor _avatar;
-        private float _lead = 0.25f;       // 最大リード距離(m)
-        private bool _enabledDefault = true;
-
         private const string GeneratedDir = "Assets/PersonalSpace/Generated";
         private const string AnimDir = GeneratedDir + "/PS_Anim";
         private const string ControllerPath = GeneratedDir + "/PS_RemoteOffset.controller";
@@ -44,40 +38,10 @@ namespace PersonalSpace.Editor
         private const string PGain = "PS_Gain";    // 押し出しの強さ
         private const string PLead = "PS_Lead";    // 遅延補償の量
 
-        [MenuItem("Tools/Personal Space/Remote Offset (遅延補償)")]
-        public static void Open()
+        /// <summary>遅延補償の Controller を生成し、MA Merge Animator と同期パラメータを注入する。</summary>
+        public static void GenerateOffset(VRCAvatarDescriptor avatar, float lead, bool enabledDefault)
         {
-            GetWindow<PersonalSpaceRemoteOffsetWindow>("PS Remote Offset");
-        }
-
-        private void OnGUI()
-        {
-            EditorGUILayout.LabelField("リモート位置ズラし (遅延補償)", EditorStyles.boldLabel);
-            _avatar = (VRCAvatarDescriptor)EditorGUILayout.ObjectField(
-                "Avatar", _avatar, typeof(VRCAvatarDescriptor), true);
-            _lead = EditorGUILayout.Slider("最大リード距離 (m)", _lead, 0.05f, 0.6f);
-            _enabledDefault = EditorGUILayout.Toggle("既定でON", _enabledDefault);
-
-            EditorGUILayout.Space();
-            using (new EditorGUI.DisabledScope(_avatar == null))
-            {
-                if (GUILayout.Button("生成 / 更新")) Generate();
-                if (GUILayout.Button("Expression Menu を生成 (ON/OFF)")) GenerateMenu();
-                if (GUILayout.Button("削除")) Remove();
-            }
-
-            EditorGUILayout.HelpBox(
-                "「生成/更新」で Controller を作り、Modular Avatar 経由で FX にマージ＋\n" +
-                "パラメータ(PS_OffX/OffZ 同期, PS_Enabled 同期)を非破壊注入します。\n" +
-                "「Expression Menu を生成」でメニュー(有効/反応範囲/強さ/遅延補償量)を MA で追加。\n" +
-                "FaceEmo など NDMF 系ツールと共存できます。手動の Merge Animator 設定は不要。\n" +
-                "アプリ側は既定でオフセットを送信します(止めるには --no-remote-offset)。",
-                MessageType.Info);
-        }
-
-        private void Generate()
-        {
-            var animator = _avatar.GetComponent<Animator>();
+            var animator = avatar.GetComponent<Animator>();
             if (animator == null || !animator.isHuman)
             {
                 EditorUtility.DisplayDialog("Personal Space",
@@ -92,7 +56,7 @@ namespace PersonalSpace.Editor
                 return;
             }
             Transform armature = hips.parent;
-            string armPath = AnimationUtility.CalculateTransformPath(armature, _avatar.transform);
+            string armPath = AnimationUtility.CalculateTransformPath(armature, avatar.transform);
             Vector3 basePos = armature.localPosition;
 
             EnsureFolder(GeneratedDir);
@@ -100,10 +64,10 @@ namespace PersonalSpace.Editor
 
             // 各方向のクリップ(Armature.localPosition を basePos から ±lead ずらす)
             AnimationClip center = MakeClip("PS_Off_Center", armPath, basePos);
-            AnimationClip xPlus = MakeClip("PS_Off_XPlus", armPath, basePos + new Vector3(_lead, 0f, 0f));
-            AnimationClip xMinus = MakeClip("PS_Off_XMinus", armPath, basePos + new Vector3(-_lead, 0f, 0f));
-            AnimationClip zPlus = MakeClip("PS_Off_ZPlus", armPath, basePos + new Vector3(0f, 0f, _lead));
-            AnimationClip zMinus = MakeClip("PS_Off_ZMinus", armPath, basePos + new Vector3(0f, 0f, -_lead));
+            AnimationClip xPlus = MakeClip("PS_Off_XPlus", armPath, basePos + new Vector3(lead, 0f, 0f));
+            AnimationClip xMinus = MakeClip("PS_Off_XMinus", armPath, basePos + new Vector3(-lead, 0f, 0f));
+            AnimationClip zPlus = MakeClip("PS_Off_ZPlus", armPath, basePos + new Vector3(0f, 0f, lead));
+            AnimationClip zMinus = MakeClip("PS_Off_ZMinus", armPath, basePos + new Vector3(0f, 0f, -lead));
 
             // AnimatorController
             if (File.Exists(ControllerPath)) AssetDatabase.DeleteAsset(ControllerPath);
@@ -163,14 +127,14 @@ namespace PersonalSpace.Editor
             EditorUtility.SetDirty(controller);
 
             // Modular Avatar 経由で FX にマージ＋同期パラメータを注入（FaceEmo 等と共存）
-            PersonalSpaceMA.CleanupLegacyExprParams(_avatar, "PS_");
-            PersonalSpaceMA.CleanupLegacyMenu(_avatar);
-            PersonalSpaceMA.EnsureMergeAnimator(_avatar, controller);
-            PersonalSpaceMA.UpsertParameter(_avatar, PEnabled, ParameterSyncType.Bool,
-                localOnly: false, saved: true, def: _enabledDefault ? 1f : 0f);
-            PersonalSpaceMA.UpsertParameter(_avatar, POffX, ParameterSyncType.Float,
+            PersonalSpaceMA.CleanupLegacyExprParams(avatar, "PS_");
+            PersonalSpaceMA.CleanupLegacyMenu(avatar);
+            PersonalSpaceMA.EnsureMergeAnimator(avatar, controller);
+            PersonalSpaceMA.UpsertParameter(avatar, PEnabled, ParameterSyncType.Bool,
+                localOnly: false, saved: true, def: enabledDefault ? 1f : 0f);
+            PersonalSpaceMA.UpsertParameter(avatar, POffX, ParameterSyncType.Float,
                 localOnly: false, saved: false, def: 0f);
-            PersonalSpaceMA.UpsertParameter(_avatar, POffZ, ParameterSyncType.Float,
+            PersonalSpaceMA.UpsertParameter(avatar, POffZ, ParameterSyncType.Float,
                 localOnly: false, saved: false, def: 0f);
 
             AssetDatabase.SaveAssets();
@@ -179,43 +143,8 @@ namespace PersonalSpace.Editor
                       + " (Armature=" + armPath + ")");
         }
 
-        private static ChildMotion Child(Motion motion, float x, float y)
-        {
-            return new ChildMotion
-            {
-                motion = motion,
-                position = new Vector2(x, y),
-                timeScale = 1f,
-                directBlendParameter = "",
-            };
-        }
-
-        private AnimationClip MakeClip(string clipName, string armPath, Vector3 pos)
-        {
-            var clip = new AnimationClip { name = clipName };
-            SetConstant(clip, armPath, "m_LocalPosition.x", pos.x);
-            SetConstant(clip, armPath, "m_LocalPosition.y", pos.y);
-            SetConstant(clip, armPath, "m_LocalPosition.z", pos.z);
-            string path = AnimDir + "/" + clipName + ".anim";
-            if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
-            AssetDatabase.CreateAsset(clip, path);
-            return clip;
-        }
-
-        private static void SetConstant(AnimationClip clip, string path, string prop, float value)
-        {
-            var binding = new EditorCurveBinding
-            {
-                path = path,
-                type = typeof(Transform),
-                propertyName = prop,
-            };
-            var curve = new AnimationCurve(new Keyframe(0f, value), new Keyframe(1f / 60f, value));
-            AnimationUtility.SetEditorCurve(clip, binding, curve);
-        }
-
-        // Expression Menu(PS_Menu) を作り、MA Menu Installer で非破壊にインストールする。
-        private void GenerateMenu()
+        /// <summary>Expression Menu(PS_Menu) を作り、MA Menu Installer で非破壊インストールする。</summary>
+        public static void GenerateMenu(VRCAvatarDescriptor avatar, bool enabledDefault)
         {
             EnsureFolder(GeneratedDir);
 
@@ -223,7 +152,7 @@ namespace PersonalSpace.Editor
             var psMenu = AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(menuPath);
             if (psMenu == null)
             {
-                psMenu = CreateInstance<VRCExpressionsMenu>();
+                psMenu = ScriptableObject.CreateInstance<VRCExpressionsMenu>();
                 psMenu.name = "PS_Menu";
                 AssetDatabase.CreateAsset(psMenu, menuPath);
             }
@@ -250,7 +179,7 @@ namespace PersonalSpace.Editor
             var psRoot = AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(rootPath);
             if (psRoot == null)
             {
-                psRoot = CreateInstance<VRCExpressionsMenu>();
+                psRoot = ScriptableObject.CreateInstance<VRCExpressionsMenu>();
                 psRoot.name = "PS_MenuRoot";
                 AssetDatabase.CreateAsset(psRoot, rootPath);
             }
@@ -269,21 +198,70 @@ namespace PersonalSpace.Editor
             }
 
             // MA で非破壊にメニュー＆パラメータを注入（FaceEmo 等と共存）
-            PersonalSpaceMA.CleanupLegacyExprParams(_avatar, "PS_");
-            PersonalSpaceMA.CleanupLegacyMenu(_avatar);
-            PersonalSpaceMA.EnsureMenuInstaller(_avatar, psRoot);
-            PersonalSpaceMA.UpsertParameter(_avatar, PEnabled, ParameterSyncType.Bool,
-                localOnly: false, saved: true, def: _enabledDefault ? 1f : 0f);
+            PersonalSpaceMA.CleanupLegacyExprParams(avatar, "PS_");
+            PersonalSpaceMA.CleanupLegacyMenu(avatar);
+            PersonalSpaceMA.EnsureMenuInstaller(avatar, psRoot);
+            PersonalSpaceMA.UpsertParameter(avatar, PEnabled, ParameterSyncType.Bool,
+                localOnly: false, saved: true, def: enabledDefault ? 1f : 0f);
             // 反応範囲/強さ/遅延補償量: ローカル(非同期)。既定 範囲1.0, 強さ0.5, 遅延補償0.5
-            PersonalSpaceMA.UpsertParameter(_avatar, PRange, ParameterSyncType.Float,
+            PersonalSpaceMA.UpsertParameter(avatar, PRange, ParameterSyncType.Float,
                 localOnly: true, saved: true, def: 1.0f);
-            PersonalSpaceMA.UpsertParameter(_avatar, PGain, ParameterSyncType.Float,
+            PersonalSpaceMA.UpsertParameter(avatar, PGain, ParameterSyncType.Float,
                 localOnly: true, saved: true, def: 0.5f);
-            PersonalSpaceMA.UpsertParameter(_avatar, PLead, ParameterSyncType.Float,
+            PersonalSpaceMA.UpsertParameter(avatar, PLead, ParameterSyncType.Float,
                 localOnly: true, saved: true, def: 0.5f);
 
             AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
+        }
+
+        /// <summary>遅延補償・メニュー分の生成物と MA コンポーネントを除去する（センサーは残す）。</summary>
+        public static void Remove(VRCAvatarDescriptor avatar)
+        {
+            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath) != null)
+                AssetDatabase.DeleteAsset(ControllerPath);
+            if (AssetDatabase.IsValidFolder(AnimDir))
+                AssetDatabase.DeleteAsset(AnimDir);
+
+            PersonalSpaceMA.RemoveComponentsOfType<ModularAvatarMenuInstaller>(avatar);
+            PersonalSpaceMA.RemoveComponentsOfType<ModularAvatarMergeAnimator>(avatar);
+            PersonalSpaceMA.RemoveParametersMatching(avatar, n =>
+                n == PEnabled || n == POffX || n == POffZ || n == PRange || n == PGain || n == PLead);
+        }
+
+        private static ChildMotion Child(Motion motion, float x, float y)
+        {
+            return new ChildMotion
+            {
+                motion = motion,
+                position = new Vector2(x, y),
+                timeScale = 1f,
+                directBlendParameter = "",
+            };
+        }
+
+        private static AnimationClip MakeClip(string clipName, string armPath, Vector3 pos)
+        {
+            var clip = new AnimationClip { name = clipName };
+            SetConstant(clip, armPath, "m_LocalPosition.x", pos.x);
+            SetConstant(clip, armPath, "m_LocalPosition.y", pos.y);
+            SetConstant(clip, armPath, "m_LocalPosition.z", pos.z);
+            string path = AnimDir + "/" + clipName + ".anim";
+            if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
+            AssetDatabase.CreateAsset(clip, path);
+            return clip;
+        }
+
+        private static void SetConstant(AnimationClip clip, string path, string prop, float value)
+        {
+            var binding = new EditorCurveBinding
+            {
+                path = path,
+                type = typeof(Transform),
+                propertyName = prop,
+            };
+            var curve = new AnimationCurve(new Keyframe(0f, value), new Keyframe(1f / 60f, value));
+            AnimationUtility.SetEditorCurve(clip, binding, curve);
         }
 
         private static void AddRadial(VRCExpressionsMenu menu, string label, string param)
@@ -305,24 +283,6 @@ namespace PersonalSpace.Editor
                 },
             });
             EditorUtility.SetDirty(menu);
-        }
-
-        private void Remove()
-        {
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath) != null)
-                AssetDatabase.DeleteAsset(ControllerPath);
-            if (AssetDatabase.IsValidFolder(AnimDir))
-                AssetDatabase.DeleteAsset(AnimDir);
-
-            // MA のメニュー/マージ＋このウィンドウのパラメータのみ除去（センサーは残す）
-            PersonalSpaceMA.RemoveComponentsOfType<ModularAvatarMenuInstaller>(_avatar);
-            PersonalSpaceMA.RemoveComponentsOfType<ModularAvatarMergeAnimator>(_avatar);
-            PersonalSpaceMA.RemoveParametersMatching(_avatar, n =>
-                n == PEnabled || n == POffX || n == POffZ || n == PRange || n == PGain || n == PLead);
-            PersonalSpaceMA.DestroyRootIfEmpty(_avatar);
-            PersonalSpaceMA.CleanupLegacyExprParams(_avatar, "PS_");
-            AssetDatabase.SaveAssets();
-            Debug.Log("[PersonalSpace] リモートオフセットを削除しました");
         }
 
         private static void EnsureFolder(string path)
