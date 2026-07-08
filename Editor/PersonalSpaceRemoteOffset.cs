@@ -280,9 +280,11 @@ namespace PersonalSpace.Editor
             go.transform.localScale = new Vector3(maxRadius, 0.005f, maxRadius); // 平たいプレビュー
             go.SetActive(true);
 
-            var mf = go.GetComponent<MeshFilter>() ?? Undo.AddComponent<MeshFilter>(go);
+            var mf = go.GetComponent<MeshFilter>();
+            if (mf == null) mf = Undo.AddComponent<MeshFilter>(go);
             mf.sharedMesh = GetCylinderMesh();
-            var mr = go.GetComponent<MeshRenderer>() ?? Undo.AddComponent<MeshRenderer>(go);
+            var mr = go.GetComponent<MeshRenderer>();
+            if (mr == null) mr = Undo.AddComponent<MeshRenderer>(go);
             mr.sharedMaterial = GetRangeMaterial();
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             mr.receiveShadows = false;
@@ -368,7 +370,8 @@ namespace PersonalSpace.Editor
             nso.transform.localPosition = new Vector3(0f, 0.9f, 0f);
             nso.transform.localRotation = Quaternion.identity;
             nso.transform.localScale = Vector3.one;
-            var recv = nso.GetComponent<VRCContactReceiver>() ?? Undo.AddComponent<VRCContactReceiver>(nso);
+            var recv = nso.GetComponent<VRCContactReceiver>();
+            if (recv == null) recv = Undo.AddComponent<VRCContactReceiver>(nso);
             recv.shapeType = ContactBase.ShapeType.Capsule;
             recv.radius = cloakDistance;
             recv.height = 3.0f;

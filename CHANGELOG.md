@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.1]
+
+- 範囲表示/透明化のセットアップ時に `MissingComponentException`（PS_RangeViz の MeshFilter 等）で失敗するバグを修正。`GetComponent() ?? AddComponent()` が Unity の疑似 null を無視する問題を `if (== null)` に置換。
+
 ## [0.6.0]
 
 - **透明化モード**を追加。近づかれると**他人視点で自分のメッシュが消える**（自分視点では見えたまま）。メニュー「透明化」ON で有効。押し出しの代替として使える。
