@@ -215,18 +215,20 @@ namespace PersonalSpace.Editor
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
         }
 
-        /// <summary>遅延補償・メニュー分の生成物と MA コンポーネントを除去する（センサーは残す）。</summary>
-        public static void Remove(VRCAvatarDescriptor avatar)
+        /// <summary>遅延補償・メニューの生成アセット（Controller/クリップ/メニュー）を削除する。</summary>
+        public static void DeleteAssets()
         {
             if (AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath) != null)
                 AssetDatabase.DeleteAsset(ControllerPath);
             if (AssetDatabase.IsValidFolder(AnimDir))
                 AssetDatabase.DeleteAsset(AnimDir);
 
-            PersonalSpaceMA.RemoveComponentsOfType<ModularAvatarMenuInstaller>(avatar);
-            PersonalSpaceMA.RemoveComponentsOfType<ModularAvatarMergeAnimator>(avatar);
-            PersonalSpaceMA.RemoveParametersMatching(avatar, n =>
-                n == PEnabled || n == POffX || n == POffZ || n == PRange || n == PGain || n == PLead);
+            string[] menus = { GeneratedDir + "/PS_Menu.asset", GeneratedDir + "/PS_MenuRoot.asset" };
+            foreach (string p in menus)
+            {
+                if (AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(p) != null)
+                    AssetDatabase.DeleteAsset(p);
+            }
         }
 
         private static ChildMotion Child(Motion motion, float x, float y)

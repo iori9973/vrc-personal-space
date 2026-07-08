@@ -187,13 +187,13 @@ namespace PersonalSpace.Editor
             {
                 Undo.DestroyObjectImmediate(root.gameObject);
             }
-            // 遅延補償・メニュー分も除去
-            PersonalSpaceRemote.Remove(_avatar);
-            // 旧方式の残骸掃除 ＋ MA 側のセンサーパラメータ削除
+            // MA 統合オブジェクト(PS_ModularAvatar)をコンポーネントごと丸ごと除去
+            PersonalSpaceMA.RemoveAll(_avatar);
+            // 生成アセット(Controller/クリップ/メニュー)を削除
+            PersonalSpaceRemote.DeleteAssets();
+            // 旧方式で直接編集した Expression Parameters / Menu の残骸も掃除
             PersonalSpaceMA.CleanupLegacyExprParams(_avatar, ParamPrefix);
             PersonalSpaceMA.CleanupLegacyMenu(_avatar);
-            PersonalSpaceMA.RemoveParametersMatching(_avatar, IsSensorParamName);
-            PersonalSpaceMA.DestroyRootIfEmpty(_avatar);
             AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] 削除しました: " + _avatar.name);
         }
