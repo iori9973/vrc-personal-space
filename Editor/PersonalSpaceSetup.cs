@@ -1,5 +1,7 @@
 #if VRC_SDK_VRCSDK3
+using System;
 using System.Collections.Generic;
+using System.IO;
 using nadena.dev.modular_avatar.core;
 using UnityEditor;
 using UnityEngine;
@@ -79,7 +81,7 @@ namespace PersonalSpace.Editor
             }
             _includeCloak = EditorGUILayout.Toggle("透明化機能（近づかれたら消える）", _includeCloak);
             using (new EditorGUI.DisabledScope(!_includeCloak))
-                _cloakDistance = EditorGUILayout.Slider("　透明化する距離 (m)", _cloakDistance, 0.2f, 1.5f);
+                _cloakDistance = EditorGUILayout.FloatField("　透明化する距離 (m)", _cloakDistance);
             _includeMenu = EditorGUILayout.Toggle("メニューを追加する", _includeMenu);
             using (new EditorGUI.DisabledScope(!_includeMenu))
                 _enabledDefault = EditorGUILayout.Toggle("　メニュー既定でON", _enabledDefault);
@@ -97,6 +99,71 @@ namespace PersonalSpace.Editor
                 "最大反応半径 = メニュー「反応範囲」の上限。実行時にこの範囲内で縮められます。\n" +
                 "センサーは Local Only でランク非計上。FaceEmo 等の NDMF 系ツールと共存できます。",
                 MessageType.Info);
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("OSC アプリ（PC常駐）", EditorStyles.boldLabel);
+            if (GUILayout.Button("OSCアプリをPCにインストール / 更新"))
+                InstallOscApp();
+            EditorGUILayout.HelpBox(
+                "押し出し機能を使うには PC で OSC アプリを常駐させます。\n" +
+                "このボタンで PC 共通の固定フォルダ（" + OscInstallDir + "）へコピーします。\n" +
+                "プロジェクトが何個あっても実体は1箇所にまとまり、そこの PersonalSpace.bat から起動・自動起動できます。\n" +
+                "※透明化だけを使う場合は OSC アプリ不要です。",
+                MessageType.None);
+        }
+
+        // PC 共通のアプリ設置先（プロジェクト非依存）。
+        private static string OscInstallDir =>
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VRCPersonalSpace", "app");
+
+        // パッケージ同梱の osc フォルダを固定フォルダへコピーする。
+        private void InstallOscApp()
+        {
+            string src = Path.GetFullPath("Packages/com.vrc-personal-space/osc");
+            if (!Directory.Exists(src))
+            {
+                EditorUtility.DisplayDialog("Personal Space",
+                    "同梱の osc フォルダが見つかりませんでした:\n" + src +
+                    "\n\nVCC でパッケージが正しく入っているか確認してください。", "OK");
+                return;
+            }
+            string dst = OscInstallDir;
+            try
+            {
+                CopyDirRecursive(src, dst);
+            }
+            catch (Exception e)
+            {
+                EditorUtility.DisplayDialog("Personal Space",
+                    "インストールに失敗しました:\n" + e.Message, "OK");
+                return;
+            }
+            Debug.Log("[PersonalSpace] OSCアプリをインストールしました: " + dst);
+            EditorUtility.RevealInFinder(Path.Combine(dst, "PersonalSpace.bat"));
+            EditorUtility.DisplayDialog("Personal Space",
+                "OSCアプリをインストールしました:\n" + dst +
+                "\n\nこのフォルダの PersonalSpace.bat をダブルクリックで起動できます。" +
+                "\n（VCC で更新したら、このボタンを押し直して上書き更新してください）", "OK");
+        }
+
+        // .meta / __pycache__ を除いて再帰コピー（上書き）。
+        private static void CopyDirRecursive(string src, string dst)
+        {
+            Directory.CreateDirectory(dst);
+            foreach (string file in Directory.GetFiles(src))
+            {
+                string name = Path.GetFileName(file);
+                if (name.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) continue;
+                File.Copy(file, Path.Combine(dst, name), true);
+            }
+            foreach (string dir in Directory.GetDirectories(src))
+            {
+                string name = Path.GetFileName(dir);
+                if (name == "__pycache__") continue;
+                CopyDirRecursive(dir, Path.Combine(dst, name));
+            }
         }
 
         private void Setup()
