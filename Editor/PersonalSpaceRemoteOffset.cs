@@ -27,9 +27,15 @@ namespace PersonalSpace.Editor
     /// </summary>
     internal static class PersonalSpaceRemote
     {
-        private const string GeneratedDir = "Assets/PersonalSpace/Generated";
-        private const string AnimDir = GeneratedDir + "/PS_Anim";
-        private const string ControllerPath = GeneratedDir + "/PS_RemoteOffset.controller";
+        private const string GeneratedRoot = "Assets/PersonalSpace/Generated";
+        // 生成アセットはアバターごとのサブフォルダに分ける（同一プロジェクトで複数アバターに対応）。
+        private static string DirFor(VRCAvatarDescriptor avatar) => GeneratedRoot + "/" + SafeName(avatar.name);
+        private static string SafeName(string n)
+        {
+            if (string.IsNullOrEmpty(n)) return "Avatar";
+            foreach (char c in Path.GetInvalidFileNameChars()) n = n.Replace(c, '_');
+            return n;
+        }
 
         private const string POffX = "PS_OffX";
         private const string POffZ = "PS_OffZ";
@@ -41,18 +47,12 @@ namespace PersonalSpace.Editor
         private const string PLead = "PS_Lead";    // 遅延補償の量
 
         // 範囲の視覚表示（足元リング）。押し出し=イエロー / 透明化=シアン。
-        private const string RangeCtrlPath = GeneratedDir + "/PS_RangeViz.controller";
-        private const string RangeMatPath = GeneratedDir + "/PS_RangeViz.mat";
         private const string RangeObj = "PS_RangeViz";   // 押し出しの反応範囲リング(コンテナ配下)
         private const string PShowRange = "PS_ShowRange"; // 反応範囲の表示 ON/OFF
-
-        private const string CloakVizCtrlPath = GeneratedDir + "/PS_CloakViz.controller";
-        private const string CloakVizMatPath = GeneratedDir + "/PS_CloakViz.mat";
         private const string CloakVizObj = "PS_CloakViz"; // 透明化の距離リング(コンテナ配下)
         private const string PShowCloak = "PS_ShowCloak"; // 透明化範囲の表示 ON/OFF
 
         // 透明化モード（近づかれたら他人視点で自分が消える）
-        private const string CloakCtrlPath = GeneratedDir + "/PS_Cloak.controller";
         private const string NearObj = "PS_NearSensor";   // 近接検知用の受信機
         private const string PNear = "PS_Near";           // 一定内に誰かいる(同期Bool)
         private const string PCloak = "PS_CloakMode";     // 透明化モード ON/OFF(同期Bool)
@@ -60,10 +60,6 @@ namespace PersonalSpace.Editor
         private const string PCloakSelf = "PS_CloakSelf";   // 自分視点でも消す(ローカル・非同期)
         // 近接センサーのアバター root 相対パス（半径アニメの参照先）
         private static string CloakSensorPath => PersonalSpaceMA.ContainerName + "/" + NearObj;
-
-        // サブメニュー資産
-        private const string MenuPushPath = GeneratedDir + "/PS_MenuPush.asset";
-        private const string MenuCloakPath = GeneratedDir + "/PS_MenuCloak.asset";
 
         // 全ヒューマノイドに自動生成される Contact Sender のタグ
         private static readonly string[] BodyTags = { "Head", "Torso", "Hand", "Foot", "Finger" };
@@ -89,19 +85,22 @@ namespace PersonalSpace.Editor
             string armPath = AnimationUtility.CalculateTransformPath(armature, avatar.transform);
             Vector3 basePos = armature.localPosition;
 
-            EnsureFolder(GeneratedDir);
-            EnsureFolder(AnimDir);
+            string dir = DirFor(avatar);
+            string animDir = dir + "/PS_Anim";
+            string controllerPath = dir + "/PS_RemoteOffset.controller";
+            EnsureFolder(dir);
+            EnsureFolder(animDir);
 
             // 各方向のクリップ(Armature.localPosition を basePos から ±lead ずらす)
-            AnimationClip center = MakeClip("PS_Off_Center", armPath, basePos);
-            AnimationClip xPlus = MakeClip("PS_Off_XPlus", armPath, basePos + new Vector3(lead, 0f, 0f));
-            AnimationClip xMinus = MakeClip("PS_Off_XMinus", armPath, basePos + new Vector3(-lead, 0f, 0f));
-            AnimationClip zPlus = MakeClip("PS_Off_ZPlus", armPath, basePos + new Vector3(0f, 0f, lead));
-            AnimationClip zMinus = MakeClip("PS_Off_ZMinus", armPath, basePos + new Vector3(0f, 0f, -lead));
+            AnimationClip center = MakeClip("PS_Off_Center", animDir, armPath, basePos);
+            AnimationClip xPlus = MakeClip("PS_Off_XPlus", animDir, armPath, basePos + new Vector3(lead, 0f, 0f));
+            AnimationClip xMinus = MakeClip("PS_Off_XMinus", animDir, armPath, basePos + new Vector3(-lead, 0f, 0f));
+            AnimationClip zPlus = MakeClip("PS_Off_ZPlus", animDir, armPath, basePos + new Vector3(0f, 0f, lead));
+            AnimationClip zMinus = MakeClip("PS_Off_ZMinus", animDir, armPath, basePos + new Vector3(0f, 0f, -lead));
 
             // AnimatorController
-            if (File.Exists(ControllerPath)) AssetDatabase.DeleteAsset(ControllerPath);
-            var controller = AnimatorController.CreateAnimatorControllerAtPath(ControllerPath);
+            if (File.Exists(controllerPath)) AssetDatabase.DeleteAsset(controllerPath);
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
             controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
             controller.AddParameter(PEnabled, AnimatorControllerParameterType.Bool);
             controller.AddParameter(POffX, AnimatorControllerParameterType.Float);
@@ -169,7 +168,7 @@ namespace PersonalSpace.Editor
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
-            Debug.Log("[PersonalSpace] リモートオフセット生成完了: " + ControllerPath
+            Debug.Log("[PersonalSpace] リモートオフセット生成完了: " + controllerPath
                       + " (Armature=" + armPath + ")");
         }
 
@@ -177,21 +176,22 @@ namespace PersonalSpace.Editor
         public static void GenerateMenu(VRCAvatarDescriptor avatar, bool enabledDefault,
                                         bool includePush, bool includeCloak)
         {
-            EnsureFolder(GeneratedDir);
+            string dir = DirFor(avatar);
+            EnsureFolder(dir);
 
-            string menuPath = GeneratedDir + "/PS_Menu.asset";
+            string menuPath = dir + "/PS_Menu.asset";
             var psMenu = LoadOrCreateMenu(menuPath, "PS_Menu");
             psMenu.controls = new List<VRCExpressionsMenu.Control>();
 
             if (includePush && includeCloak)
             {
                 // 両方 ON: 「押し出し」「透明化」のサブページに分ける
-                var pushMenu = LoadOrCreateMenu(MenuPushPath, "PS_MenuPush");
+                var pushMenu = LoadOrCreateMenu(dir + "/PS_MenuPush.asset", "PS_MenuPush");
                 pushMenu.controls = new List<VRCExpressionsMenu.Control>();
                 AddPushControls(pushMenu);
                 EditorUtility.SetDirty(pushMenu);
 
-                var cloakMenu = LoadOrCreateMenu(MenuCloakPath, "PS_MenuCloak");
+                var cloakMenu = LoadOrCreateMenu(dir + "/PS_MenuCloak.asset", "PS_MenuCloak");
                 cloakMenu.controls = new List<VRCExpressionsMenu.Control>();
                 AddCloakControls(cloakMenu);
                 EditorUtility.SetDirty(cloakMenu);
@@ -211,7 +211,7 @@ namespace PersonalSpace.Editor
             EditorUtility.SetDirty(psMenu);
 
             // 「Personal Space」サブメニューにまとめるラッパー
-            string rootPath = GeneratedDir + "/PS_MenuRoot.asset";
+            string rootPath = dir + "/PS_MenuRoot.asset";
             var psRoot = LoadOrCreateMenu(rootPath, "PS_MenuRoot");
             psRoot.controls = new List<VRCExpressionsMenu.Control>
             {
@@ -302,52 +302,47 @@ namespace PersonalSpace.Editor
         /// <summary>生成アセット（Controller/クリップ/メニュー等）を削除する。
         /// includeMenu=false のときメニューアセットは残す（Setup 時は GenerateMenu が
         /// 同一パスに作り直すため、削除→同フレーム再生成の競合で controls が空になるのを防ぐ）。</summary>
-        public static void DeleteAssets(bool includeMenu = true)
+        public static void DeleteAssets(VRCAvatarDescriptor avatar, bool includeMenu = true)
         {
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath) != null)
-                AssetDatabase.DeleteAsset(ControllerPath);
-            if (AssetDatabase.IsValidFolder(AnimDir))
-                AssetDatabase.DeleteAsset(AnimDir);
-
+            string dir = DirFor(avatar);
             if (includeMenu)
             {
-                string[] menus =
-                {
-                    GeneratedDir + "/PS_Menu.asset", GeneratedDir + "/PS_MenuRoot.asset",
-                    MenuPushPath, MenuCloakPath,
-                };
-                foreach (string p in menus)
-                {
-                    if (AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(p) != null)
-                        AssetDatabase.DeleteAsset(p);
-                }
+                // 完全削除（「削除」ボタン）: このアバターのフォルダごと消す
+                if (AssetDatabase.IsValidFolder(dir))
+                    AssetDatabase.DeleteAsset(dir);
+                return;
             }
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(RangeCtrlPath) != null)
-                AssetDatabase.DeleteAsset(RangeCtrlPath);
-            if (AssetDatabase.LoadAssetAtPath<Material>(RangeMatPath) != null)
-                AssetDatabase.DeleteAsset(RangeMatPath);
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(CloakVizCtrlPath) != null)
-                AssetDatabase.DeleteAsset(CloakVizCtrlPath);
-            if (AssetDatabase.LoadAssetAtPath<Material>(CloakVizMatPath) != null)
-                AssetDatabase.DeleteAsset(CloakVizMatPath);
-            string ringPath = GeneratedDir + "/PS_RingMesh.asset";
-            if (AssetDatabase.LoadAssetAtPath<Mesh>(ringPath) != null)
-                AssetDatabase.DeleteAsset(ringPath);
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(CloakCtrlPath) != null)
-                AssetDatabase.DeleteAsset(CloakCtrlPath);
+            // Setup 時: メニュー資産は GenerateMenu が作り直すので残し、それ以外を削除。
+            string animDir = dir + "/PS_Anim";
+            if (AssetDatabase.IsValidFolder(animDir))
+                AssetDatabase.DeleteAsset(animDir);
+            string[] ctrls =
+            {
+                dir + "/PS_RemoteOffset.controller", dir + "/PS_RangeViz.controller",
+                dir + "/PS_CloakViz.controller", dir + "/PS_Cloak.controller",
+            };
+            foreach (string p in ctrls)
+                if (AssetDatabase.LoadAssetAtPath<AnimatorController>(p) != null)
+                    AssetDatabase.DeleteAsset(p);
+            string[] mats = { dir + "/PS_RangeViz.mat", dir + "/PS_CloakViz.mat" };
+            foreach (string p in mats)
+                if (AssetDatabase.LoadAssetAtPath<Material>(p) != null)
+                    AssetDatabase.DeleteAsset(p);
         }
 
         /// <summary>押し出しの反応範囲リング（イエロー）。PS_Range に連動・自分のみ表示。</summary>
         public static void GenerateRangeViz(VRCAvatarDescriptor avatar, float maxRadius)
         {
-            GenerateViz(avatar, RangeObj, RangeCtrlPath, RangeMatPath,
+            string dir = DirFor(avatar);
+            GenerateViz(avatar, RangeObj, dir + "/PS_RangeViz.controller", dir + "/PS_RangeViz.mat",
                 new Color(1f, 0.85f, 0.15f, 0.25f), PShowRange, PRange, maxRadius, 0.01f);
         }
 
         /// <summary>透明化の距離リング（シアン）。PS_CloakRange に連動・自分のみ表示。</summary>
         public static void GenerateCloakViz(VRCAvatarDescriptor avatar, float maxDistance)
         {
-            GenerateViz(avatar, CloakVizObj, CloakVizCtrlPath, CloakVizMatPath,
+            string dir = DirFor(avatar);
+            GenerateViz(avatar, CloakVizObj, dir + "/PS_CloakViz.controller", dir + "/PS_CloakViz.mat",
                 new Color(0.15f, 0.9f, 1f, 0.25f), PShowCloak, PCloakRange, maxDistance, 0.02f);
         }
 
@@ -356,8 +351,9 @@ namespace PersonalSpace.Editor
         private static void GenerateViz(VRCAvatarDescriptor avatar, string objName, string ctrlPath,
             string matPath, Color color, string showParam, string rangeParam, float maxRadius, float yOffset)
         {
-            EnsureFolder(GeneratedDir);
-            EnsureFolder(AnimDir);
+            string animDir = DirFor(avatar) + "/PS_Anim";
+            EnsureFolder(DirFor(avatar));
+            EnsureFolder(animDir);
 
             Transform container = PersonalSpaceMA.EnsureContainer(avatar);
             Transform t = container.Find(objName);
@@ -388,9 +384,9 @@ namespace PersonalSpace.Editor
             const float flatY = 0.005f;
             string objPath = PersonalSpaceMA.ContainerName + "/" + objName;
 
-            AnimationClip off = MakeVizClip(objName + "_Off", objPath, false, sMin, flatY);
-            AnimationClip minC = MakeVizClip(objName + "_Min", objPath, true, sMin, flatY);
-            AnimationClip maxC = MakeVizClip(objName + "_Max", objPath, true, sMax, flatY);
+            AnimationClip off = MakeVizClip(objName + "_Off", animDir, objPath, false, sMin, flatY);
+            AnimationClip minC = MakeVizClip(objName + "_Min", animDir, objPath, true, sMin, flatY);
+            AnimationClip maxC = MakeVizClip(objName + "_Max", animDir, objPath, true, sMax, flatY);
 
             if (File.Exists(ctrlPath)) AssetDatabase.DeleteAsset(ctrlPath);
             var controller = AnimatorController.CreateAnimatorControllerAtPath(ctrlPath);
@@ -449,8 +445,11 @@ namespace PersonalSpace.Editor
         /// <summary>透明化モード: 一定内に近づかれたら他人視点で自分のメッシュを非表示にする。</summary>
         public static void GenerateCloak(VRCAvatarDescriptor avatar, float cloakDistance)
         {
-            EnsureFolder(GeneratedDir);
-            EnsureFolder(AnimDir);
+            string dir = DirFor(avatar);
+            string animDir = dir + "/PS_Anim";
+            string cloakCtrlPath = dir + "/PS_Cloak.controller";
+            EnsureFolder(dir);
+            EnsureFolder(animDir);
 
             // 近接検知の受信機(PS_NearSensor)。Constant型で「一定内に誰かいる」を PS_Near(同期)に。
             Transform container = PersonalSpaceMA.EnsureContainer(avatar);
@@ -493,11 +492,11 @@ namespace PersonalSpace.Editor
                 SetConstantTyped(visible, path, rt, "m_Enabled", 1f);
                 SetConstantTyped(hidden, path, rt, "m_Enabled", 0f);
             }
-            SaveClipAsset(visible, "PS_Cloak_Visible");
-            SaveClipAsset(hidden, "PS_Cloak_Hidden");
+            SaveClipAsset(visible, animDir, "PS_Cloak_Visible");
+            SaveClipAsset(hidden, animDir, "PS_Cloak_Hidden");
 
-            if (File.Exists(CloakCtrlPath)) AssetDatabase.DeleteAsset(CloakCtrlPath);
-            var controller = AnimatorController.CreateAnimatorControllerAtPath(CloakCtrlPath);
+            if (File.Exists(cloakCtrlPath)) AssetDatabase.DeleteAsset(cloakCtrlPath);
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(cloakCtrlPath);
             controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
             controller.AddParameter(PCloak, AnimatorControllerParameterType.Bool);
             controller.AddParameter(PNear, AnimatorControllerParameterType.Bool);
@@ -545,8 +544,8 @@ namespace PersonalSpace.Editor
             // 実効距離 = cloakDistance*(0.2 + 0.8*PS_CloakRange)。押し出しの反応範囲と同じ考え方。
             float rMax = cloakDistance;
             float rMin = cloakDistance * 0.2f;
-            AnimationClip rMinC = MakeCloakRadiusClip("PS_CloakRange_Min", rMin);
-            AnimationClip rMaxC = MakeCloakRadiusClip("PS_CloakRange_Max", rMax);
+            AnimationClip rMinC = MakeCloakRadiusClip("PS_CloakRange_Min", animDir, rMin);
+            AnimationClip rMaxC = MakeCloakRadiusClip("PS_CloakRange_Max", animDir, rMax);
 
             controller.AddLayer("PS_CloakRange");
             AnimatorControllerLayer[] ls = controller.layers;
@@ -586,7 +585,7 @@ namespace PersonalSpace.Editor
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
-            Debug.Log("[PersonalSpace] 透明化モードを生成しました: " + CloakCtrlPath);
+            Debug.Log("[PersonalSpace] 透明化モードを生成しました: " + cloakCtrlPath);
         }
 
         // r の Transform が PS_ 自前オブジェクト配下かどうか（透明化の対象から除外するため）
@@ -605,7 +604,7 @@ namespace PersonalSpace.Editor
         }
 
         // 近接センサー(VRCContactReceiver)の半径を一定値にするクリップ。
-        private static AnimationClip MakeCloakRadiusClip(string clipName, float radius)
+        private static AnimationClip MakeCloakRadiusClip(string clipName, string animDir, float radius)
         {
             var clip = new AnimationClip { name = clipName };
             var binding = new EditorCurveBinding
@@ -616,22 +615,23 @@ namespace PersonalSpace.Editor
             };
             var curve = new AnimationCurve(new Keyframe(0f, radius), new Keyframe(1f / 60f, radius));
             AnimationUtility.SetEditorCurve(clip, binding, curve);
-            SaveClipAsset(clip, clipName);
+            SaveClipAsset(clip, animDir, clipName);
             return clip;
         }
 
-        private static void SaveClipAsset(AnimationClip clip, string clipName)
+        private static void SaveClipAsset(AnimationClip clip, string animDir, string clipName)
         {
-            string path = AnimDir + "/" + clipName + ".anim";
+            string path = animDir + "/" + clipName + ".anim";
             if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
             AssetDatabase.CreateAsset(clip, path);
         }
 
-        // 足元に置く平たいリング(輪)メッシュを生成してアセット化する。
+        // 足元に置く平たいリング(輪)メッシュを生成してアセット化する（全アバター共通・不変）。
         // 外周半径0.5・帯幅は外周の約12%。XZ平面に寝かせ、法線は上向き。
         private static Mesh GetRingMesh()
         {
-            string ringPath = GeneratedDir + "/PS_RingMesh.asset";
+            EnsureFolder(GeneratedRoot);
+            string ringPath = GeneratedRoot + "/PS_RingMesh.asset";
             var existing = AssetDatabase.LoadAssetAtPath<Mesh>(ringPath);
             if (existing != null) return existing;
 
@@ -685,14 +685,14 @@ namespace PersonalSpace.Editor
             return mat;
         }
 
-        private static AnimationClip MakeVizClip(string clipName, string objPath, bool active, float scaleXZ, float scaleY)
+        private static AnimationClip MakeVizClip(string clipName, string animDir, string objPath, bool active, float scaleXZ, float scaleY)
         {
             var clip = new AnimationClip { name = clipName };
             SetConstantTyped(clip, objPath, typeof(GameObject), "m_IsActive", active ? 1f : 0f);
             SetConstantTyped(clip, objPath, typeof(Transform), "m_LocalScale.x", scaleXZ);
             SetConstantTyped(clip, objPath, typeof(Transform), "m_LocalScale.y", scaleY);
             SetConstantTyped(clip, objPath, typeof(Transform), "m_LocalScale.z", scaleXZ);
-            string path = AnimDir + "/" + clipName + ".anim";
+            string path = animDir + "/" + clipName + ".anim";
             if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
             AssetDatabase.CreateAsset(clip, path);
             return clip;
@@ -729,13 +729,13 @@ namespace PersonalSpace.Editor
             };
         }
 
-        private static AnimationClip MakeClip(string clipName, string armPath, Vector3 pos)
+        private static AnimationClip MakeClip(string clipName, string animDir, string armPath, Vector3 pos)
         {
             var clip = new AnimationClip { name = clipName };
             SetConstant(clip, armPath, "m_LocalPosition.x", pos.x);
             SetConstant(clip, armPath, "m_LocalPosition.y", pos.y);
             SetConstant(clip, armPath, "m_LocalPosition.z", pos.z);
-            string path = AnimDir + "/" + clipName + ".anim";
+            string path = animDir + "/" + clipName + ".anim";
             if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
             AssetDatabase.CreateAsset(clip, path);
             return clip;

@@ -282,7 +282,7 @@ namespace PersonalSpace.Editor
             DestroyChild("PS_NearSensor");
             PersonalSpaceMA.RemoveAll(_avatar); // 旧 PS_ModularAvatar(直下)
             // 生成アセット(Controller/クリップ/メニュー)を削除
-            PersonalSpaceRemote.DeleteAssets(includeMenu: full);
+            PersonalSpaceRemote.DeleteAssets(_avatar, includeMenu: full);
             // 旧方式で直接編集した Expression Parameters / Menu の残骸も掃除
             PersonalSpaceMA.CleanupLegacyExprParams(_avatar, ParamPrefix);
             PersonalSpaceMA.CleanupLegacyMenu(_avatar);
