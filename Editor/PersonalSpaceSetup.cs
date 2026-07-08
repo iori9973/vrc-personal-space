@@ -127,10 +127,13 @@ namespace PersonalSpace.Editor
                 childGo.transform.localScale = Vector3.one;
 
                 var recv = Undo.AddComponent<VRCContactReceiver>(childGo);
-                recv.shapeType = ContactBase.ShapeType.Sphere;
+                // 縦カプセルにすることで、身長差があっても水平距離だけで検知できる
+                // （高さ方向のすり抜けを防ぐ）。radius=水平の反応範囲、height=縦の被覆。
+                recv.shapeType = ContactBase.ShapeType.Capsule;
                 recv.radius = _radius;
+                recv.height = 3.0f;       // 概ね 地面〜2.4m を覆う（センサー中心 _height 基準）
                 recv.position = Vector3.zero;
-                recv.rotation = Quaternion.identity;
+                recv.rotation = Quaternion.identity;  // ローカル Y(上) 方向に伸びる
                 recv.receiverType = ContactReceiver.ReceiverType.Proximity;
                 recv.parameter = ParamPrefix + i;
                 recv.collisionTags = new List<string>(BodyTags);
@@ -146,7 +149,10 @@ namespace PersonalSpace.Editor
             if (_includeOffset)
                 PersonalSpaceRemote.GenerateOffset(_avatar, _lead, _enabledDefault);
             if (_includeMenu)
+            {
                 PersonalSpaceRemote.GenerateMenu(_avatar, _enabledDefault);
+                PersonalSpaceRemote.GenerateRangeViz(_avatar, _radius);
+            }
 
             Debug.Log($"[PersonalSpace] セットアップ完了: {_avatar.name} ({_sensorCount}方向"
                       + (_includeOffset ? "・遅延補償" : "") + (_includeMenu ? "・メニュー" : "") + ")");
@@ -187,6 +193,9 @@ namespace PersonalSpace.Editor
             {
                 Undo.DestroyObjectImmediate(root.gameObject);
             }
+            // 範囲表示メッシュ(アバター直下)を除去
+            Transform rangeViz = _avatar.transform.Find("PS_RangeViz");
+            if (rangeViz != null) Undo.DestroyObjectImmediate(rangeViz.gameObject);
             // MA 統合オブジェクト(PS_ModularAvatar)をコンポーネントごと丸ごと除去
             PersonalSpaceMA.RemoveAll(_avatar);
             // 生成アセット(Controller/クリップ/メニュー)を削除

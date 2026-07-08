@@ -38,6 +38,12 @@ namespace PersonalSpace.Editor
         private const string PGain = "PS_Gain";    // 押し出しの強さ
         private const string PLead = "PS_Lead";    // 遅延補償の量
 
+        // 範囲の視覚表示（足元リング）
+        private const string RangeCtrlPath = GeneratedDir + "/PS_RangeViz.controller";
+        private const string RangeMatPath = GeneratedDir + "/PS_RangeViz.mat";
+        private const string RangeObj = "PS_RangeViz";   // アバター直下の表示メッシュ
+        private const string PShowRange = "PS_ShowRange"; // 範囲表示 ON/OFF
+
         /// <summary>遅延補償の Controller を生成し、MA Merge Animator と同期パラメータを注入する。</summary>
         public static void GenerateOffset(VRCAvatarDescriptor avatar, float lead, bool enabledDefault)
         {
@@ -173,6 +179,7 @@ namespace PersonalSpace.Editor
             AddRadial(psMenu, "反応範囲", PRange);
             AddRadial(psMenu, "押し出しの強さ", PGain);
             AddRadial(psMenu, "遅延補償の量", PLead);
+            AddToggle(psMenu, "範囲表示", PShowRange);
 
             // 「Personal Space」サブメニューにまとめるラッパーを作る（root 直下が散らからないよう）
             string rootPath = GeneratedDir + "/PS_MenuRoot.asset";
@@ -210,6 +217,8 @@ namespace PersonalSpace.Editor
                 localOnly: true, saved: true, def: 0.5f);
             PersonalSpaceMA.UpsertParameter(avatar, PLead, ParameterSyncType.Float,
                 localOnly: true, saved: true, def: 0.5f);
+            PersonalSpaceMA.UpsertParameter(avatar, PShowRange, ParameterSyncType.Bool,
+                localOnly: true, saved: true, def: 0f);
 
             AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
@@ -229,6 +238,151 @@ namespace PersonalSpace.Editor
                 if (AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(p) != null)
                     AssetDatabase.DeleteAsset(p);
             }
+            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(RangeCtrlPath) != null)
+                AssetDatabase.DeleteAsset(RangeCtrlPath);
+            if (AssetDatabase.LoadAssetAtPath<Material>(RangeMatPath) != null)
+                AssetDatabase.DeleteAsset(RangeMatPath);
+        }
+
+        /// <summary>足元に反応範囲を示す半透明ディスクを生成し、PS_Range に連動させる（ローカル表示）。</summary>
+        public static void GenerateRangeViz(VRCAvatarDescriptor avatar, float maxRadius)
+        {
+            EnsureFolder(GeneratedDir);
+            EnsureFolder(AnimDir);
+
+            // 表示メッシュ(アバター直下 PS_RangeViz)
+            Transform t = avatar.transform.Find(RangeObj);
+            GameObject go = t != null ? t.gameObject : null;
+            if (go == null)
+            {
+                go = new GameObject(RangeObj);
+                Undo.RegisterCreatedObjectUndo(go, "Create " + RangeObj);
+                go.transform.SetParent(avatar.transform, false);
+            }
+            go.transform.localPosition = new Vector3(0f, 0.01f, 0f);
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = new Vector3(maxRadius, 0.005f, maxRadius); // 平たいプレビュー
+            go.SetActive(true);
+
+            var mf = go.GetComponent<MeshFilter>() ?? Undo.AddComponent<MeshFilter>(go);
+            mf.sharedMesh = GetCylinderMesh();
+            var mr = go.GetComponent<MeshRenderer>() ?? Undo.AddComponent<MeshRenderer>(go);
+            mr.sharedMaterial = GetRangeMaterial();
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+
+            // シリンダーは半径0.5なので半径R には scale.xz = 2R。実効範囲 R = maxRadius*(0.2+0.8*PS_Range)
+            float sMin = 2f * maxRadius * 0.2f;
+            float sMax = 2f * maxRadius * 1.0f;
+            const float flatY = 0.005f;
+
+            AnimationClip off = MakeVizClip("PS_RangeViz_Off", false, sMin, flatY);
+            AnimationClip minC = MakeVizClip("PS_RangeViz_Min", true, sMin, flatY);
+            AnimationClip maxC = MakeVizClip("PS_RangeViz_Max", true, sMax, flatY);
+
+            if (File.Exists(RangeCtrlPath)) AssetDatabase.DeleteAsset(RangeCtrlPath);
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(RangeCtrlPath);
+            controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
+            controller.AddParameter(PShowRange, AnimatorControllerParameterType.Bool);
+            controller.AddParameter(PRange, AnimatorControllerParameterType.Float);
+
+            AnimatorControllerLayer[] layers = controller.layers;
+            layers[0].name = "PS_RangeViz";
+            controller.layers = layers;
+            AnimatorStateMachine sm = controller.layers[0].stateMachine;
+
+            var offState = sm.AddState("Off");
+            offState.motion = off;
+            sm.defaultState = offState;
+
+            var tree = new BlendTree
+            {
+                name = "PS_RangeTree",
+                blendType = BlendTreeType.Simple1D,
+                blendParameter = PRange,
+            };
+            AssetDatabase.AddObjectToAsset(tree, controller);
+            tree.children = new[]
+            {
+                new ChildMotion { motion = minC, threshold = 0f, timeScale = 1f, directBlendParameter = "" },
+                new ChildMotion { motion = maxC, threshold = 1f, timeScale = 1f, directBlendParameter = "" },
+            };
+            var onState = sm.AddState("Shown");
+            onState.motion = tree;
+
+            // Off -> Shown : ローカル かつ 範囲表示ON
+            var toOn = offState.AddTransition(onState);
+            toOn.hasExitTime = false; toOn.duration = 0f;
+            toOn.AddCondition(AnimatorConditionMode.If, 0f, "IsLocal");
+            toOn.AddCondition(AnimatorConditionMode.If, 0f, PShowRange);
+            // Shown -> Off : リモート化 or OFF
+            var toOff1 = onState.AddTransition(offState);
+            toOff1.hasExitTime = false; toOff1.duration = 0f;
+            toOff1.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsLocal");
+            var toOff2 = onState.AddTransition(offState);
+            toOff2.hasExitTime = false; toOff2.duration = 0f;
+            toOff2.AddCondition(AnimatorConditionMode.IfNot, 0f, PShowRange);
+
+            EditorUtility.SetDirty(controller);
+
+            PersonalSpaceMA.EnsureMergeAnimator(avatar, controller);
+            PersonalSpaceMA.UpsertParameter(avatar, PShowRange, ParameterSyncType.Bool,
+                localOnly: true, saved: true, def: 0f);
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            Debug.Log("[PersonalSpace] 範囲表示を生成しました: " + RangeCtrlPath);
+        }
+
+        private static Mesh GetCylinderMesh()
+        {
+            var temp = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            Mesh m = temp.GetComponent<MeshFilter>().sharedMesh;
+            Object.DestroyImmediate(temp);
+            return m;
+        }
+
+        private static Material GetRangeMaterial()
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(RangeMatPath);
+            if (mat != null) return mat;
+            Shader sh = Shader.Find("Sprites/Default") ?? Shader.Find("Unlit/Transparent");
+            mat = new Material(sh) { color = new Color(0.2f, 0.8f, 1f, 0.25f) };
+            AssetDatabase.CreateAsset(mat, RangeMatPath);
+            return mat;
+        }
+
+        private static AnimationClip MakeVizClip(string clipName, bool active, float scaleXZ, float scaleY)
+        {
+            var clip = new AnimationClip { name = clipName };
+            SetConstantTyped(clip, RangeObj, typeof(GameObject), "m_IsActive", active ? 1f : 0f);
+            SetConstantTyped(clip, RangeObj, typeof(Transform), "m_LocalScale.x", scaleXZ);
+            SetConstantTyped(clip, RangeObj, typeof(Transform), "m_LocalScale.y", scaleY);
+            SetConstantTyped(clip, RangeObj, typeof(Transform), "m_LocalScale.z", scaleXZ);
+            string path = AnimDir + "/" + clipName + ".anim";
+            if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
+            AssetDatabase.CreateAsset(clip, path);
+            return clip;
+        }
+
+        private static void SetConstantTyped(AnimationClip clip, string path, System.Type type, string prop, float value)
+        {
+            var binding = new EditorCurveBinding { path = path, type = type, propertyName = prop };
+            var curve = new AnimationCurve(new Keyframe(0f, value), new Keyframe(1f / 60f, value));
+            AnimationUtility.SetEditorCurve(clip, binding, curve);
+        }
+
+        private static void AddToggle(VRCExpressionsMenu menu, string label, string param)
+        {
+            if (menu.controls.Exists(c => c.parameter != null && c.parameter.name == param)) return;
+            menu.controls.Add(new VRCExpressionsMenu.Control
+            {
+                name = label,
+                type = VRCExpressionsMenu.Control.ControlType.Toggle,
+                parameter = new VRCExpressionsMenu.Control.Parameter { name = param },
+                value = 1f,
+            });
+            EditorUtility.SetDirty(menu);
         }
 
         private static ChildMotion Child(Motion motion, float x, float y)
