@@ -1,0 +1,74 @@
+name: Release and Update VPM Listing
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------
+  # Job 1: zip 作成 → GitHub Release 作成
+  # ---------------------------------------------------------------
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get Version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Create VPM Zip
+        run: |
+          zip -r "vrc-personal-space-${{ steps.version.outputs.version }}.zip" . \
+            --exclude "*.git*" \
+            --exclude ".github/*" \
+            --exclude "docs/*" \
+            --exclude "*/__pycache__/*"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            vrc-personal-space-${{ steps.version.outputs.version }}.zip
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+
+  # ---------------------------------------------------------------
+  # Job 2: VPM listing 更新（main を明示 checkout してから push）
+  # ---------------------------------------------------------------
+  update-listing:
+    needs: release
+    if: "!contains(github.ref_name, '-')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Switch to main and pull latest
+        run: |
+          git checkout main
+          git pull origin main
+
+      - name: Build VPM listing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_VERSION: ${{ needs.release.outputs.version }}
+        run: python3 .github/scripts/build_listing.py
+
+      - name: Commit updated listing
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.json
+          git diff --staged --quiet || git commit -m "Update VPM listing for v${{ needs.release.outputs.version }} [skip ci]"
+          git push origin main

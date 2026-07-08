@@ -1,0 +1,10 @@
+{
+  "name": "Personal Space Packages",
+  "author": "iori9973",
+  "url": "https://iori9973.github.io/vrc-personal-space/index.json",
+  "packages": {
+    "com.vrc-personal-space": {
+      "versions": {}
+    }
+  }
+}
