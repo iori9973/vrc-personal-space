@@ -89,6 +89,21 @@ namespace PersonalSpace.Editor
             EditorUtility.SetDirty(comp);
         }
 
+        /// <summary>旧方式でアバターの Expression Menu に直接差した PS メニューを掃除（重複防止）。</summary>
+        public static void CleanupLegacyMenu(VRCAvatarDescriptor avatar)
+        {
+            VRCExpressionsMenu menu = avatar.expressionsMenu;
+            if (menu == null || menu.controls == null) return;
+            int before = menu.controls.Count;
+            menu.controls.RemoveAll(c =>
+                c != null && (
+                    c.name == "Personal Space" ||
+                    (c.type == VRCExpressionsMenu.Control.ControlType.SubMenu &&
+                     c.subMenu != null && c.subMenu.name != null &&
+                     (c.subMenu.name == "PS_Menu" || c.subMenu.name == "PS_MenuRoot"))));
+            if (menu.controls.Count != before) EditorUtility.SetDirty(menu);
+        }
+
         /// <summary>旧方式で Expression Parameters に直接足していた PS_ を掃除（重複防止）。</summary>
         public static void CleanupLegacyExprParams(VRCAvatarDescriptor avatar, string prefix)
         {

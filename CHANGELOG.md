@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.1]
+
+- 旧バージョン(〜0.2.0)がアバターの Expression Menu に直接差した「Personal Space」submenu を、セットアップ時に自動で掃除するように修正（`CleanupLegacyMenu`）。これがないと未定義パラメータ警告やメニュー重複が残っていた。
+
 ## [0.3.0]
 
 - **Modular Avatar 対応（非破壊注入）**。パラメータ・メニュー・遅延補償アニメを、Expression 資産を直接編集する代わりに MA コンポーネント（MA Parameters / MA Menu Installer / MA Merge Animator）でアバター直下の `PS_ModularAvatar` に注入するように変更。

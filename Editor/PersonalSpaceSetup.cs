@@ -130,8 +130,9 @@ namespace PersonalSpace.Editor
         // （FaceEmo など NDMF 系ツールに消されないよう非破壊で）。
         private void AddParameters()
         {
-            // 旧方式で直接足していた PS_ を掃除（重複防止）
+            // 旧方式で直接足していた PS_ パラメータ／メニューを掃除（重複防止）
             PersonalSpaceMA.CleanupLegacyExprParams(_avatar, ParamPrefix);
+            PersonalSpaceMA.CleanupLegacyMenu(_avatar);
             // センサー数変更に追従: 既存のセンサー番号パラメータをいったん除去
             PersonalSpaceMA.RemoveParametersMatching(_avatar, IsSensorParamName);
 

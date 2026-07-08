@@ -164,6 +164,7 @@ namespace PersonalSpace.Editor
 
             // Modular Avatar 経由で FX にマージ＋同期パラメータを注入（FaceEmo 等と共存）
             PersonalSpaceMA.CleanupLegacyExprParams(_avatar, "PS_");
+            PersonalSpaceMA.CleanupLegacyMenu(_avatar);
             PersonalSpaceMA.EnsureMergeAnimator(_avatar, controller);
             PersonalSpaceMA.UpsertParameter(_avatar, PEnabled, ParameterSyncType.Bool,
                 localOnly: false, saved: true, def: _enabledDefault ? 1f : 0f);
@@ -269,6 +270,7 @@ namespace PersonalSpace.Editor
 
             // MA で非破壊にメニュー＆パラメータを注入（FaceEmo 等と共存）
             PersonalSpaceMA.CleanupLegacyExprParams(_avatar, "PS_");
+            PersonalSpaceMA.CleanupLegacyMenu(_avatar);
             PersonalSpaceMA.EnsureMenuInstaller(_avatar, psRoot);
             PersonalSpaceMA.UpsertParameter(_avatar, PEnabled, ParameterSyncType.Bool,
                 localOnly: false, saved: true, def: _enabledDefault ? 1f : 0f);
