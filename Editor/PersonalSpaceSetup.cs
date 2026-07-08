@@ -43,7 +43,8 @@ namespace PersonalSpace.Editor
         private bool _enabledDefault = true;  // メニュー ON/OFF の初期値
         private float _cloakDistance = 0.6f;  // 透明化する接近距離(m)
 
-        private const string RootName = "PersonalSpaceSensors";
+        private const string SensorsName = "Sensors";                    // コンテナ配下のセンサー親
+        private const string LegacySensorsRoot = "PersonalSpaceSensors"; // 旧レイアウト(直下)掃除用
         private const string ParamPrefix = "PS_";
 
         // 全ヒューマノイドアバターに自動生成される Contact Sender のタグ。
@@ -168,7 +169,10 @@ namespace PersonalSpace.Editor
 
         private void Setup()
         {
-            TearDown();  // まっさらにしてから、有効な機能だけを生成する
+            // まっさらにしてから、有効な機能だけを生成する。
+            // メニューアセットは残す（GenerateMenu が中身を作り直す。削除→同フレーム再生成だと
+            // controls が空で保存される AssetDatabase 競合を避けるため）。
+            TearDown(full: false);
 
             if (_includePush)
             {
@@ -194,9 +198,10 @@ namespace PersonalSpace.Editor
         // 放射状に N 個の Contact Receiver(縦カプセル・Proximity) を生成する
         private void CreateSensors()
         {
-            var rootGo = new GameObject(RootName);
+            Transform container = PersonalSpaceMA.EnsureContainer(_avatar);
+            var rootGo = new GameObject(SensorsName);
             Undo.RegisterCreatedObjectUndo(rootGo, "Create PersonalSpace Sensors");
-            rootGo.transform.SetParent(_avatar.transform, false);
+            rootGo.transform.SetParent(container, false);
             Transform root = rootGo.transform;
             root.localPosition = new Vector3(0f, _height, 0f);
 
@@ -258,27 +263,33 @@ namespace PersonalSpace.Editor
 
         private void RemoveSetup()
         {
-            TearDown();
+            TearDown(full: true);
             AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] 削除しました: " + _avatar.name);
         }
 
-        // 生成物を丸ごと除去してまっさらにする（Setup 冒頭でも呼ぶ）
-        private void TearDown()
+        // 生成物を丸ごと除去してまっさらにする（Setup 冒頭でも呼ぶ）。
+        // full=false のときメニューアセットは残す（GenerateMenu が中身を作り直すため）。
+        private void TearDown(bool full)
         {
-            Transform root = _avatar.transform.Find(RootName);
-            if (root != null) Undo.DestroyObjectImmediate(root.gameObject);
-            Transform rangeViz = _avatar.transform.Find("PS_RangeViz");
-            if (rangeViz != null) Undo.DestroyObjectImmediate(rangeViz.gameObject);
-            Transform nearSensor = _avatar.transform.Find("PS_NearSensor");
-            if (nearSensor != null) Undo.DestroyObjectImmediate(nearSensor.gameObject);
-            // MA 統合オブジェクト(PS_ModularAvatar)をコンポーネントごと丸ごと除去
-            PersonalSpaceMA.RemoveAll(_avatar);
+            // 新レイアウト: 集約コンテナごと削除（Sensors/リング/近接/MA を一括）
+            DestroyChild(PersonalSpaceMA.ContainerName);
+            // 旧レイアウト(〜v0.8.x はアバター直下に個別配置)の掃除
+            DestroyChild(LegacySensorsRoot);
+            DestroyChild("PS_RangeViz");
+            DestroyChild("PS_NearSensor");
+            PersonalSpaceMA.RemoveAll(_avatar); // 旧 PS_ModularAvatar(直下)
             // 生成アセット(Controller/クリップ/メニュー)を削除
-            PersonalSpaceRemote.DeleteAssets();
+            PersonalSpaceRemote.DeleteAssets(includeMenu: full);
             // 旧方式で直接編集した Expression Parameters / Menu の残骸も掃除
             PersonalSpaceMA.CleanupLegacyExprParams(_avatar, ParamPrefix);
             PersonalSpaceMA.CleanupLegacyMenu(_avatar);
+        }
+
+        private void DestroyChild(string name)
+        {
+            Transform t = _avatar.transform.Find(name);
+            if (t != null) Undo.DestroyObjectImmediate(t.gameObject);
         }
     }
 }

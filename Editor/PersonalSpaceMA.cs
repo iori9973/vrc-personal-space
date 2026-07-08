@@ -15,24 +15,56 @@ namespace PersonalSpace.Editor
     /// そのため Expression 資産を直接編集すると消えてしまう。MA コンポーネントで注入すれば
     /// NDMF パイプラインで合成され、共存できる。
     ///
-    /// すべての注入物はアバター直下の 1 つの GameObject (PS_ModularAvatar) に集約する。
+    /// 生成物はアバター直下の 1 つのコンテナ(PersonalSpace)配下にまとめ、MA コンポーネントは
+    /// その中の PS_ModularAvatar に集約する。
     /// </summary>
     internal static class PersonalSpaceMA
     {
         public const string ObjName = "PS_ModularAvatar";
+        // 生成物をすべてこの 1 つの子にまとめる（Hierarchy を散らかさないため）。
+        // アバター直下: PersonalSpace/{Sensors, PS_RangeViz, PS_NearSensor, PS_ModularAvatar}
+        public const string ContainerName = "PersonalSpace";
 
-        public static GameObject EnsureRoot(VRCAvatarDescriptor avatar)
+        /// <summary>集約コンテナ(PersonalSpace)を取得（無ければ作る）。原点・等倍で置く。</summary>
+        public static Transform EnsureContainer(VRCAvatarDescriptor avatar)
         {
-            Transform t = avatar.transform.Find(ObjName);
-            if (t != null) return t.gameObject;
+            Transform c = avatar.transform.Find(ContainerName);
+            if (c != null) return c;
 
-            var go = new GameObject(ObjName);
-            Undo.RegisterCreatedObjectUndo(go, "Create " + ObjName);
+            var go = new GameObject(ContainerName);
+            Undo.RegisterCreatedObjectUndo(go, "Create " + ContainerName);
             go.transform.SetParent(avatar.transform, false);
             go.transform.localPosition = Vector3.zero;
             go.transform.localRotation = Quaternion.identity;
             go.transform.localScale = Vector3.one;
+            return go.transform;
+        }
+
+        public static GameObject EnsureRoot(VRCAvatarDescriptor avatar)
+        {
+            Transform container = EnsureContainer(avatar);
+            Transform t = container.Find(ObjName);
+            if (t != null) return t.gameObject;
+
+            var go = new GameObject(ObjName);
+            Undo.RegisterCreatedObjectUndo(go, "Create " + ObjName);
+            go.transform.SetParent(container, false);
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
             return go;
+        }
+
+        // PS_ModularAvatar を新レイアウト(コンテナ配下)・旧レイアウト(アバター直下)の両方から探す。
+        private static Transform FindRoot(VRCAvatarDescriptor avatar)
+        {
+            Transform c = avatar.transform.Find(ContainerName);
+            if (c != null)
+            {
+                Transform r = c.Find(ObjName);
+                if (r != null) return r;
+            }
+            return avatar.transform.Find(ObjName);
         }
 
         /// <summary>MA Parameters に 1 件 upsert する（struct なのでインデックス差し替え）。</summary>
@@ -122,7 +154,7 @@ namespace PersonalSpace.Editor
         /// <summary>MA Parameters から条件に合う名前のエントリを削除する。</summary>
         public static void RemoveParametersMatching(VRCAvatarDescriptor avatar, System.Predicate<string> match)
         {
-            Transform t = avatar.transform.Find(ObjName);
+            Transform t = FindRoot(avatar);
             if (t == null) return;
             var comp = t.GetComponent<ModularAvatarParameters>();
             if (comp == null) return;
@@ -132,7 +164,7 @@ namespace PersonalSpace.Editor
 
         public static void RemoveComponentsOfType<T>(VRCAvatarDescriptor avatar) where T : Component
         {
-            Transform t = avatar.transform.Find(ObjName);
+            Transform t = FindRoot(avatar);
             if (t == null) return;
             foreach (var c in t.GetComponents<T>()) Undo.DestroyObjectImmediate(c);
         }
@@ -140,7 +172,7 @@ namespace PersonalSpace.Editor
         /// <summary>MA コンポーネントが 1 つも残っていなければ統合オブジェクトを削除する。</summary>
         public static void DestroyRootIfEmpty(VRCAvatarDescriptor avatar)
         {
-            Transform t = avatar.transform.Find(ObjName);
+            Transform t = FindRoot(avatar);
             if (t == null) return;
             var comps = t.GetComponents<AvatarTagComponent>();
             if (comps == null || comps.Length == 0) Undo.DestroyObjectImmediate(t.gameObject);
@@ -148,7 +180,7 @@ namespace PersonalSpace.Editor
 
         public static void RemoveAll(VRCAvatarDescriptor avatar)
         {
-            Transform t = avatar.transform.Find(ObjName);
+            Transform t = FindRoot(avatar);
             if (t != null) Undo.DestroyObjectImmediate(t.gameObject);
         }
     }

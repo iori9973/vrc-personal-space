@@ -49,7 +49,7 @@ PC 共通の固定フォルダ（`%LOCALAPPDATA%\VRCPersonalSpace\app\`）へコ
 1. メニュー **Tools > Personal Space > Setup Window** を開く。
 2. `Avatar` にアバター（VRCAvatarDescriptor）をドラッグ。
 3. 方向センサー数（既定8）や反応半径を調整し、**セットアップ / 更新** を押す。
-   - アバター直下に `PersonalSpaceSensors`（N方向センサー）が作られる。
+   - アバター直下に `PersonalSpace` コンテナが作られ、その中に `Sensors`（N方向センサー）などがまとまる。
    - Expression Parameters に `PS_0 … PS_{N-1}` (Float) が追加される。
 4. いつも通りアバターをアップロードする。
 

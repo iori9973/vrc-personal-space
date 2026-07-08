@@ -43,8 +43,10 @@ namespace PersonalSpace.Editor
         // 範囲の視覚表示（足元リング）
         private const string RangeCtrlPath = GeneratedDir + "/PS_RangeViz.controller";
         private const string RangeMatPath = GeneratedDir + "/PS_RangeViz.mat";
-        private const string RangeObj = "PS_RangeViz";   // アバター直下の表示メッシュ
+        private const string RangeObj = "PS_RangeViz";   // 表示メッシュ(コンテナ配下)
         private const string PShowRange = "PS_ShowRange"; // 範囲表示 ON/OFF
+        // アニメの参照パスはアバター root 相対（MA Merge Animator は Absolute）。
+        private static string RangeVizPath => PersonalSpaceMA.ContainerName + "/" + RangeObj;
 
         // 透明化モード（近づかれたら他人視点で自分が消える）
         private const string CloakCtrlPath = GeneratedDir + "/PS_Cloak.controller";
@@ -174,23 +176,21 @@ namespace PersonalSpace.Editor
                 psMenu.name = "PS_Menu";
                 AssetDatabase.CreateAsset(psMenu, menuPath);
             }
-            if (psMenu.controls == null)
-                psMenu.controls = new List<VRCExpressionsMenu.Control>();
+            // 有効な機能ぶんだけ毎回作り直す（前回のトグル構成が残らないよう一度クリア）
+            psMenu.controls = new List<VRCExpressionsMenu.Control>();
+            EditorUtility.SetDirty(psMenu);
 
             // 押し出し系の項目（要 OSC アプリ・センサー）
             if (includePush)
             {
-                if (!psMenu.controls.Exists(c => c.parameter != null && c.parameter.name == PEnabled))
+                psMenu.controls.Add(new VRCExpressionsMenu.Control
                 {
-                    psMenu.controls.Add(new VRCExpressionsMenu.Control
-                    {
-                        name = "有効",
-                        type = VRCExpressionsMenu.Control.ControlType.Toggle,
-                        parameter = new VRCExpressionsMenu.Control.Parameter { name = PEnabled },
-                        value = 1f,
-                    });
-                    EditorUtility.SetDirty(psMenu);
-                }
+                    name = "有効",
+                    type = VRCExpressionsMenu.Control.ControlType.Toggle,
+                    parameter = new VRCExpressionsMenu.Control.Parameter { name = PEnabled },
+                    value = 1f,
+                });
+                EditorUtility.SetDirty(psMenu);
                 AddRadial(psMenu, "反応範囲", PRange);
                 AddRadial(psMenu, "押し出しの強さ", PGain);
                 AddRadial(psMenu, "遅延補償の量", PLead);
@@ -209,19 +209,16 @@ namespace PersonalSpace.Editor
                 psRoot.name = "PS_MenuRoot";
                 AssetDatabase.CreateAsset(psRoot, rootPath);
             }
-            if (psRoot.controls == null)
-                psRoot.controls = new List<VRCExpressionsMenu.Control>();
-            if (!psRoot.controls.Exists(c =>
-                c.type == VRCExpressionsMenu.Control.ControlType.SubMenu && c.subMenu == psMenu))
+            psRoot.controls = new List<VRCExpressionsMenu.Control>
             {
-                psRoot.controls.Add(new VRCExpressionsMenu.Control
+                new VRCExpressionsMenu.Control
                 {
                     name = "Personal Space",
                     type = VRCExpressionsMenu.Control.ControlType.SubMenu,
                     subMenu = psMenu,
-                });
-                EditorUtility.SetDirty(psRoot);
-            }
+                },
+            };
+            EditorUtility.SetDirty(psRoot);
 
             // MA で非破壊にメニュー＆パラメータを注入（FaceEmo 等と共存）
             PersonalSpaceMA.CleanupLegacyExprParams(avatar, "PS_");
@@ -249,19 +246,24 @@ namespace PersonalSpace.Editor
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
         }
 
-        /// <summary>遅延補償・メニューの生成アセット（Controller/クリップ/メニュー）を削除する。</summary>
-        public static void DeleteAssets()
+        /// <summary>生成アセット（Controller/クリップ/メニュー等）を削除する。
+        /// includeMenu=false のときメニューアセットは残す（Setup 時は GenerateMenu が
+        /// 同一パスに作り直すため、削除→同フレーム再生成の競合で controls が空になるのを防ぐ）。</summary>
+        public static void DeleteAssets(bool includeMenu = true)
         {
             if (AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath) != null)
                 AssetDatabase.DeleteAsset(ControllerPath);
             if (AssetDatabase.IsValidFolder(AnimDir))
                 AssetDatabase.DeleteAsset(AnimDir);
 
-            string[] menus = { GeneratedDir + "/PS_Menu.asset", GeneratedDir + "/PS_MenuRoot.asset" };
-            foreach (string p in menus)
+            if (includeMenu)
             {
-                if (AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(p) != null)
-                    AssetDatabase.DeleteAsset(p);
+                string[] menus = { GeneratedDir + "/PS_Menu.asset", GeneratedDir + "/PS_MenuRoot.asset" };
+                foreach (string p in menus)
+                {
+                    if (AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(p) != null)
+                        AssetDatabase.DeleteAsset(p);
+                }
             }
             if (AssetDatabase.LoadAssetAtPath<AnimatorController>(RangeCtrlPath) != null)
                 AssetDatabase.DeleteAsset(RangeCtrlPath);
@@ -280,14 +282,15 @@ namespace PersonalSpace.Editor
             EnsureFolder(GeneratedDir);
             EnsureFolder(AnimDir);
 
-            // 表示メッシュ(アバター直下 PS_RangeViz)
-            Transform t = avatar.transform.Find(RangeObj);
+            // 表示メッシュ(コンテナ配下 PersonalSpace/PS_RangeViz)
+            Transform container = PersonalSpaceMA.EnsureContainer(avatar);
+            Transform t = container.Find(RangeObj);
             GameObject go = t != null ? t.gameObject : null;
             if (go == null)
             {
                 go = new GameObject(RangeObj);
                 Undo.RegisterCreatedObjectUndo(go, "Create " + RangeObj);
-                go.transform.SetParent(avatar.transform, false);
+                go.transform.SetParent(container, false);
             }
             go.transform.localPosition = new Vector3(0f, 0.01f, 0f);
             go.transform.localRotation = Quaternion.identity;
@@ -373,13 +376,14 @@ namespace PersonalSpace.Editor
             EnsureFolder(AnimDir);
 
             // 近接検知の受信機(PS_NearSensor)。Constant型で「一定内に誰かいる」を PS_Near(同期)に。
-            Transform ns = avatar.transform.Find(NearObj);
+            Transform container = PersonalSpaceMA.EnsureContainer(avatar);
+            Transform ns = container.Find(NearObj);
             GameObject nso = ns != null ? ns.gameObject : null;
             if (nso == null)
             {
                 nso = new GameObject(NearObj);
                 Undo.RegisterCreatedObjectUndo(nso, "Create " + NearObj);
-                nso.transform.SetParent(avatar.transform, false);
+                nso.transform.SetParent(container, false);
             }
             nso.transform.localPosition = new Vector3(0f, 0.9f, 0f);
             nso.transform.localRotation = Quaternion.identity;
@@ -462,13 +466,15 @@ namespace PersonalSpace.Editor
             Debug.Log("[PersonalSpace] 透明化モードを生成しました: " + CloakCtrlPath);
         }
 
-        // r の Transform が PS_ 自前オブジェクト配下かどうか
+        // r の Transform が PS_ 自前オブジェクト配下かどうか（透明化の対象から除外するため）
         private static bool IsUnderPSObject(Transform t, Transform avatarRoot)
         {
             for (Transform p = t; p != null && p != avatarRoot; p = p.parent)
             {
                 string n = p.name;
-                if (n == "PS_ModularAvatar" || n == "PersonalSpaceSensors" ||
+                // 新レイアウト(コンテナ配下は全部自前) + 旧レイアウトの個別名
+                if (n == PersonalSpaceMA.ContainerName ||
+                    n == "PS_ModularAvatar" || n == "PersonalSpaceSensors" ||
                     n == RangeObj || n == NearObj)
                     return true;
             }
@@ -539,10 +545,11 @@ namespace PersonalSpace.Editor
         private static AnimationClip MakeVizClip(string clipName, bool active, float scaleXZ, float scaleY)
         {
             var clip = new AnimationClip { name = clipName };
-            SetConstantTyped(clip, RangeObj, typeof(GameObject), "m_IsActive", active ? 1f : 0f);
-            SetConstantTyped(clip, RangeObj, typeof(Transform), "m_LocalScale.x", scaleXZ);
-            SetConstantTyped(clip, RangeObj, typeof(Transform), "m_LocalScale.y", scaleY);
-            SetConstantTyped(clip, RangeObj, typeof(Transform), "m_LocalScale.z", scaleXZ);
+            string p = RangeVizPath;
+            SetConstantTyped(clip, p, typeof(GameObject), "m_IsActive", active ? 1f : 0f);
+            SetConstantTyped(clip, p, typeof(Transform), "m_LocalScale.x", scaleXZ);
+            SetConstantTyped(clip, p, typeof(Transform), "m_LocalScale.y", scaleY);
+            SetConstantTyped(clip, p, typeof(Transform), "m_LocalScale.z", scaleXZ);
             string path = AnimDir + "/" + clipName + ".anim";
             if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
             AssetDatabase.CreateAsset(clip, path);

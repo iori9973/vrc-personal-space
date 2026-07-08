@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0]
+
+- **Hierarchy の生成物を1つに集約**。これまでアバター直下に4つ（`PersonalSpaceSensors` / `PS_RangeViz` / `PS_NearSensor` / `PS_ModularAvatar`）分かれていたのを、単一の **`PersonalSpace`** コンテナ配下（`Sensors` / `PS_RangeViz` / `PS_NearSensor` / `PS_ModularAvatar`）にまとめた。Hierarchy がすっきりする。
+  - 旧レイアウト（直下に個別配置）はセットアップ/削除時に自動で掃除する。
+  - 範囲リングのアニメ参照パスをコンテナ配下（`PersonalSpace/PS_RangeViz`）に合わせて更新。
+  - 反映には**もう一度「セットアップ / 更新」→ 再アップロード**が必要。
+
+## [0.8.1]
+
+- **Expression Menu の中身（Personal Space サブメニュー）が空になり、実機で項目が出ないバグを修正**。セットアップ時に「メニューアセットを削除 → 同フレームで作り直す」順序になっており、Unity の AssetDatabase 競合で `PS_Menu` の controls が空のまま保存されることがあった。メニューは削除せず中身をその場で作り直す方式にして解消（「削除」ボタン時のみ完全削除）。
+  - 影響を受けた方は、パッケージ更新後にもう一度「セットアップ / 更新」を押してから再アップロードしてください。
+
 ## [0.8.0]
 
 - **OSC アプリに GUI を追加**。`osc/PersonalSpace.bat`（または `python personal_space_gui.py`）で、起動状態のランプ（停止中／接続中／待機中／動作中）・ログ・現在の逃走ベクトル/移動量をウィンドウで確認できるようになった。開始/停止ボタン、センサー数・強さ・平滑化などの設定もウィンドウから操作可能。
