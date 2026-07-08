@@ -53,6 +53,14 @@ namespace PersonalSpace.Editor
         private const string NearObj = "PS_NearSensor";   // 近接検知用の受信機
         private const string PNear = "PS_Near";           // 一定内に誰かいる(同期Bool)
         private const string PCloak = "PS_CloakMode";     // 透明化モード ON/OFF(同期Bool)
+        private const string PCloakRange = "PS_CloakRange"; // 透明化の距離(Radial・ローカル)
+        private const string PCloakSelf = "PS_CloakSelf";   // 自分視点でも消す(ローカル・非同期)
+        // 近接センサーのアバター root 相対パス（半径アニメの参照先）
+        private static string CloakSensorPath => PersonalSpaceMA.ContainerName + "/" + NearObj;
+
+        // サブメニュー資産
+        private const string MenuPushPath = GeneratedDir + "/PS_MenuPush.asset";
+        private const string MenuCloakPath = GeneratedDir + "/PS_MenuCloak.asset";
 
         // 全ヒューマノイドに自動生成される Contact Sender のタグ
         private static readonly string[] BodyTags = { "Head", "Torso", "Hand", "Foot", "Finger" };
@@ -169,54 +177,42 @@ namespace PersonalSpace.Editor
             EnsureFolder(GeneratedDir);
 
             string menuPath = GeneratedDir + "/PS_Menu.asset";
-            var psMenu = AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(menuPath);
-            if (psMenu == null)
-            {
-                psMenu = ScriptableObject.CreateInstance<VRCExpressionsMenu>();
-                psMenu.name = "PS_Menu";
-                AssetDatabase.CreateAsset(psMenu, menuPath);
-            }
-            // 有効な機能ぶんだけ毎回作り直す（前回のトグル構成が残らないよう一度クリア）
+            var psMenu = LoadOrCreateMenu(menuPath, "PS_Menu");
             psMenu.controls = new List<VRCExpressionsMenu.Control>();
+
+            if (includePush && includeCloak)
+            {
+                // 両方 ON: 「押し出し」「透明化」のサブページに分ける
+                var pushMenu = LoadOrCreateMenu(MenuPushPath, "PS_MenuPush");
+                pushMenu.controls = new List<VRCExpressionsMenu.Control>();
+                AddPushControls(pushMenu);
+                EditorUtility.SetDirty(pushMenu);
+
+                var cloakMenu = LoadOrCreateMenu(MenuCloakPath, "PS_MenuCloak");
+                cloakMenu.controls = new List<VRCExpressionsMenu.Control>();
+                AddCloakControls(cloakMenu);
+                EditorUtility.SetDirty(cloakMenu);
+
+                psMenu.controls.Add(SubMenuControl("押し出し", pushMenu));
+                psMenu.controls.Add(SubMenuControl("透明化", cloakMenu));
+            }
+            else if (includePush)
+            {
+                // 片方だけなら無駄な階層を作らず直接並べる
+                AddPushControls(psMenu);
+            }
+            else if (includeCloak)
+            {
+                AddCloakControls(psMenu);
+            }
             EditorUtility.SetDirty(psMenu);
 
-            // 押し出し系の項目（要 OSC アプリ・センサー）
-            if (includePush)
-            {
-                psMenu.controls.Add(new VRCExpressionsMenu.Control
-                {
-                    name = "有効",
-                    type = VRCExpressionsMenu.Control.ControlType.Toggle,
-                    parameter = new VRCExpressionsMenu.Control.Parameter { name = PEnabled },
-                    value = 1f,
-                });
-                EditorUtility.SetDirty(psMenu);
-                AddRadial(psMenu, "反応範囲", PRange);
-                AddRadial(psMenu, "押し出しの強さ", PGain);
-                AddRadial(psMenu, "遅延補償の量", PLead);
-                AddToggle(psMenu, "範囲表示", PShowRange);
-            }
-            // 透明化（アバター単体・OSC 不要）
-            if (includeCloak)
-                AddToggle(psMenu, "透明化", PCloak);
-
-            // 「Personal Space」サブメニューにまとめるラッパーを作る（root 直下が散らからないよう）
+            // 「Personal Space」サブメニューにまとめるラッパー
             string rootPath = GeneratedDir + "/PS_MenuRoot.asset";
-            var psRoot = AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(rootPath);
-            if (psRoot == null)
-            {
-                psRoot = ScriptableObject.CreateInstance<VRCExpressionsMenu>();
-                psRoot.name = "PS_MenuRoot";
-                AssetDatabase.CreateAsset(psRoot, rootPath);
-            }
+            var psRoot = LoadOrCreateMenu(rootPath, "PS_MenuRoot");
             psRoot.controls = new List<VRCExpressionsMenu.Control>
             {
-                new VRCExpressionsMenu.Control
-                {
-                    name = "Personal Space",
-                    type = VRCExpressionsMenu.Control.ControlType.SubMenu,
-                    subMenu = psMenu,
-                },
+                SubMenuControl("Personal Space", psMenu),
             };
             EditorUtility.SetDirty(psRoot);
 
@@ -239,11 +235,64 @@ namespace PersonalSpace.Editor
                     localOnly: true, saved: true, def: 0f);
             }
             if (includeCloak)
+            {
                 PersonalSpaceMA.UpsertParameter(avatar, PCloak, ParameterSyncType.Bool,
                     localOnly: false, saved: true, def: 0f);
+                // 透明化の距離: ローカル(非同期)。既定 1.0(=最大距離)
+                PersonalSpaceMA.UpsertParameter(avatar, PCloakRange, ParameterSyncType.Float,
+                    localOnly: true, saved: true, def: 1.0f);
+                // 自分からも消す: ローカル(非同期)。既定 0(=自分には見える)
+                PersonalSpaceMA.UpsertParameter(avatar, PCloakSelf, ParameterSyncType.Bool,
+                    localOnly: true, saved: true, def: 0f);
+            }
 
             AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
+        }
+
+        private static VRCExpressionsMenu LoadOrCreateMenu(string path, string name)
+        {
+            var m = AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(path);
+            if (m == null)
+            {
+                m = ScriptableObject.CreateInstance<VRCExpressionsMenu>();
+                m.name = name;
+                AssetDatabase.CreateAsset(m, path);
+            }
+            if (m.controls == null) m.controls = new List<VRCExpressionsMenu.Control>();
+            return m;
+        }
+
+        private static VRCExpressionsMenu.Control SubMenuControl(string name, VRCExpressionsMenu sub)
+        {
+            return new VRCExpressionsMenu.Control
+            {
+                name = name,
+                type = VRCExpressionsMenu.Control.ControlType.SubMenu,
+                subMenu = sub,
+            };
+        }
+
+        private static void AddPushControls(VRCExpressionsMenu m)
+        {
+            m.controls.Add(new VRCExpressionsMenu.Control
+            {
+                name = "有効",
+                type = VRCExpressionsMenu.Control.ControlType.Toggle,
+                parameter = new VRCExpressionsMenu.Control.Parameter { name = PEnabled },
+                value = 1f,
+            });
+            AddRadial(m, "反応範囲", PRange);
+            AddRadial(m, "押し出しの強さ", PGain);
+            AddRadial(m, "遅延補償の量", PLead);
+            AddToggle(m, "範囲表示", PShowRange);
+        }
+
+        private static void AddCloakControls(VRCExpressionsMenu m)
+        {
+            AddToggle(m, "透明化", PCloak);
+            AddRadial(m, "透明化の距離", PCloakRange);
+            AddToggle(m, "自分からも消える", PCloakSelf);
         }
 
         /// <summary>生成アセット（Controller/クリップ/メニュー等）を削除する。
@@ -258,7 +307,11 @@ namespace PersonalSpace.Editor
 
             if (includeMenu)
             {
-                string[] menus = { GeneratedDir + "/PS_Menu.asset", GeneratedDir + "/PS_MenuRoot.asset" };
+                string[] menus =
+                {
+                    GeneratedDir + "/PS_Menu.asset", GeneratedDir + "/PS_MenuRoot.asset",
+                    MenuPushPath, MenuCloakPath,
+                };
                 foreach (string p in menus)
                 {
                     if (AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(p) != null)
@@ -424,6 +477,8 @@ namespace PersonalSpace.Editor
             controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
             controller.AddParameter(PCloak, AnimatorControllerParameterType.Bool);
             controller.AddParameter(PNear, AnimatorControllerParameterType.Bool);
+            controller.AddParameter(PCloakRange, AnimatorControllerParameterType.Float);
+            controller.AddParameter(PCloakSelf, AnimatorControllerParameterType.Bool);
 
             AnimatorControllerLayer[] layers = controller.layers;
             layers[0].name = "PS_Cloak";
@@ -436,22 +491,60 @@ namespace PersonalSpace.Editor
             var hidState = sm.AddState("Hidden");
             hidState.motion = hidden;
 
-            // Visible -> Hidden : 透明化ON かつ 近い かつ 他人視点
-            var toHide = visState.AddTransition(hidState);
-            toHide.hasExitTime = false; toHide.duration = 0f;
-            toHide.AddCondition(AnimatorConditionMode.If, 0f, PCloak);
-            toHide.AddCondition(AnimatorConditionMode.If, 0f, PNear);
-            toHide.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsLocal");
-            // Hidden -> Visible : いずれか解除
+            // 消える条件 = 透明化ON かつ 近い かつ (他人視点 または 自分からも消すON)。
+            // Visible -> Hidden : 他人視点で消す（従来）
+            var toHideRemote = visState.AddTransition(hidState);
+            toHideRemote.hasExitTime = false; toHideRemote.duration = 0f;
+            toHideRemote.AddCondition(AnimatorConditionMode.If, 0f, PCloak);
+            toHideRemote.AddCondition(AnimatorConditionMode.If, 0f, PNear);
+            toHideRemote.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsLocal");
+            // Visible -> Hidden : 「自分からも消える」ON なら自分視点(IsLocal)でも消す
+            var toHideSelf = visState.AddTransition(hidState);
+            toHideSelf.hasExitTime = false; toHideSelf.duration = 0f;
+            toHideSelf.AddCondition(AnimatorConditionMode.If, 0f, PCloak);
+            toHideSelf.AddCondition(AnimatorConditionMode.If, 0f, PNear);
+            toHideSelf.AddCondition(AnimatorConditionMode.If, 0f, PCloakSelf);
+            // Hidden -> Visible : 消える条件が崩れたら戻す
             var s1 = hidState.AddTransition(visState);
             s1.hasExitTime = false; s1.duration = 0f;
             s1.AddCondition(AnimatorConditionMode.IfNot, 0f, PCloak);
             var s2 = hidState.AddTransition(visState);
             s2.hasExitTime = false; s2.duration = 0f;
             s2.AddCondition(AnimatorConditionMode.IfNot, 0f, PNear);
+            // 自分視点 かつ 自分からも消すOFF のとき見える（他人視点はこの遷移を取らない）
             var s3 = hidState.AddTransition(visState);
             s3.hasExitTime = false; s3.duration = 0f;
             s3.AddCondition(AnimatorConditionMode.If, 0f, "IsLocal");
+            s3.AddCondition(AnimatorConditionMode.IfNot, 0f, PCloakSelf);
+
+            // 2枚目のレイヤー: 近接センサーの半径を PS_CloakRange(0..1) で動的に変える。
+            // 実効距離 = cloakDistance*(0.2 + 0.8*PS_CloakRange)。押し出しの反応範囲と同じ考え方。
+            float rMax = cloakDistance;
+            float rMin = cloakDistance * 0.2f;
+            AnimationClip rMinC = MakeCloakRadiusClip("PS_CloakRange_Min", rMin);
+            AnimationClip rMaxC = MakeCloakRadiusClip("PS_CloakRange_Max", rMax);
+
+            controller.AddLayer("PS_CloakRange");
+            AnimatorControllerLayer[] ls = controller.layers;
+            int li = ls.Length - 1;
+            ls[li].defaultWeight = 1f;
+            AnimatorStateMachine rsm = ls[li].stateMachine;
+            var rTree = new BlendTree
+            {
+                name = "PS_CloakRangeTree",
+                blendType = BlendTreeType.Simple1D,
+                blendParameter = PCloakRange,
+            };
+            AssetDatabase.AddObjectToAsset(rTree, controller);
+            rTree.children = new[]
+            {
+                new ChildMotion { motion = rMinC, threshold = 0f, timeScale = 1f, directBlendParameter = "" },
+                new ChildMotion { motion = rMaxC, threshold = 1f, timeScale = 1f, directBlendParameter = "" },
+            };
+            var rState = rsm.AddState("Range");
+            rState.motion = rTree;
+            rsm.defaultState = rState;
+            controller.layers = ls;
 
             EditorUtility.SetDirty(controller);
 
@@ -460,6 +553,12 @@ namespace PersonalSpace.Editor
                 localOnly: false, saved: false, def: 0f);
             PersonalSpaceMA.UpsertParameter(avatar, PCloak, ParameterSyncType.Bool,
                 localOnly: false, saved: true, def: 0f);
+            // 透明化の距離(ローカル)。既定 1.0=最大。メニュー未生成でもこの既定で動く。
+            PersonalSpaceMA.UpsertParameter(avatar, PCloakRange, ParameterSyncType.Float,
+                localOnly: true, saved: true, def: 1.0f);
+            // 自分からも消す(ローカル/非同期・自分視点だけの効果)。既定 0=自分には見える。
+            PersonalSpaceMA.UpsertParameter(avatar, PCloakSelf, ParameterSyncType.Bool,
+                localOnly: true, saved: true, def: 0f);
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -479,6 +578,22 @@ namespace PersonalSpace.Editor
                     return true;
             }
             return false;
+        }
+
+        // 近接センサー(VRCContactReceiver)の半径を一定値にするクリップ。
+        private static AnimationClip MakeCloakRadiusClip(string clipName, float radius)
+        {
+            var clip = new AnimationClip { name = clipName };
+            var binding = new EditorCurveBinding
+            {
+                path = CloakSensorPath,
+                type = typeof(VRCContactReceiver),
+                propertyName = "radius",
+            };
+            var curve = new AnimationCurve(new Keyframe(0f, radius), new Keyframe(1f / 60f, radius));
+            AnimationUtility.SetEditorCurve(clip, binding, curve);
+            SaveClipAsset(clip, clipName);
+            return clip;
         }
 
         private static void SaveClipAsset(AnimationClip clip, string clipName)

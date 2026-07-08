@@ -82,7 +82,7 @@ namespace PersonalSpace.Editor
             }
             _includeCloak = EditorGUILayout.Toggle("透明化機能（近づかれたら消える）", _includeCloak);
             using (new EditorGUI.DisabledScope(!_includeCloak))
-                _cloakDistance = EditorGUILayout.FloatField("　透明化する距離 (m)", _cloakDistance);
+                _cloakDistance = EditorGUILayout.FloatField("　透明化する最大距離 (m)", _cloakDistance);
             _includeMenu = EditorGUILayout.Toggle("メニューを追加する", _includeMenu);
             using (new EditorGUI.DisabledScope(!_includeMenu))
                 _enabledDefault = EditorGUILayout.Toggle("　メニュー既定でON", _enabledDefault);
