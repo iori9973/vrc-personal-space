@@ -1,6 +1,7 @@
 #if VRC_SDK_VRCSDK3
 using System.Collections.Generic;
 using System.IO;
+using nadena.dev.modular_avatar.core;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -19,8 +20,8 @@ namespace PersonalSpace.Editor
     ///  - ローカル(自分視点 = IsLocal:true)ではオフセットしない(実際に /input で動くため)。
     ///  - 逃げるのを止めるとパラメータが 0 に戻り、実同期位置が追いついてオフセットも消える。
     ///
-    /// 生成した AnimatorController は Modular Avatar の Merge Animator で FX に統合する想定
-    /// (C 工程)。単体テスト時は一時的にアバターの FX に設定してもよい。
+    /// 生成した AnimatorController・メニュー・パラメータは Modular Avatar 経由で非破壊注入する
+    /// (PersonalSpaceMA)。FaceEmo など NDMF 系ツールと共存できる。手動の Merge 設定は不要。
     ///
     /// ※Unity 外で自動テストできないため、生成物はエディタ上での動作確認が必要。
     /// </summary>
@@ -66,9 +67,10 @@ namespace PersonalSpace.Editor
             }
 
             EditorGUILayout.HelpBox(
-                "PS_OffX / PS_OffZ (Float, 同期) と PS_Enabled (Bool, 同期) を追加し、\n" +
-                ControllerPath + " を生成します。\n" +
-                "この Controller は Modular Avatar の Merge Animator で FX に統合してください。\n" +
+                "「生成/更新」で Controller を作り、Modular Avatar 経由で FX にマージ＋\n" +
+                "パラメータ(PS_OffX/OffZ 同期, PS_Enabled 同期)を非破壊注入します。\n" +
+                "「Expression Menu を生成」でメニュー(有効/反応範囲/強さ/遅延補償量)を MA で追加。\n" +
+                "FaceEmo など NDMF 系ツールと共存できます。手動の Merge Animator 設定は不要。\n" +
                 "アプリ側は既定でオフセットを送信します(止めるには --no-remote-offset)。",
                 MessageType.Info);
         }
@@ -160,7 +162,16 @@ namespace PersonalSpace.Editor
 
             EditorUtility.SetDirty(controller);
 
-            AddSyncedParameters();
+            // Modular Avatar 経由で FX にマージ＋同期パラメータを注入（FaceEmo 等と共存）
+            PersonalSpaceMA.CleanupLegacyExprParams(_avatar, "PS_");
+            PersonalSpaceMA.EnsureMergeAnimator(_avatar, controller);
+            PersonalSpaceMA.UpsertParameter(_avatar, PEnabled, ParameterSyncType.Bool,
+                localOnly: false, saved: true, def: _enabledDefault ? 1f : 0f);
+            PersonalSpaceMA.UpsertParameter(_avatar, POffX, ParameterSyncType.Float,
+                localOnly: false, saved: false, def: 0f);
+            PersonalSpaceMA.UpsertParameter(_avatar, POffZ, ParameterSyncType.Float,
+                localOnly: false, saved: false, def: 0f);
+
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             Debug.Log("[PersonalSpace] リモートオフセット生成完了: " + ControllerPath
@@ -202,61 +213,10 @@ namespace PersonalSpace.Editor
             AnimationUtility.SetEditorCurve(clip, binding, curve);
         }
 
-        private void AddSyncedParameters()
-        {
-            VRCExpressionParameters vp = _avatar.expressionParameters;
-            if (vp == null)
-            {
-                vp = CreateInstance<VRCExpressionParameters>();
-                vp.parameters = new VRCExpressionParameters.Parameter[0];
-                EnsureFolder(GeneratedDir);
-                AssetDatabase.CreateAsset(vp, GeneratedDir + "/PS_ExpressionParameters.asset");
-                _avatar.expressionParameters = vp;
-                EditorUtility.SetDirty(_avatar);
-            }
-
-            var list = new List<VRCExpressionParameters.Parameter>(
-                vp.parameters ?? new VRCExpressionParameters.Parameter[0]);
-
-            Upsert(list, POffX, VRCExpressionParameters.ValueType.Float, 0f, saved: false, synced: true);
-            Upsert(list, POffZ, VRCExpressionParameters.ValueType.Float, 0f, saved: false, synced: true);
-            Upsert(list, PEnabled, VRCExpressionParameters.ValueType.Bool,
-                _enabledDefault ? 1f : 0f, saved: true, synced: true);
-
-            vp.parameters = list.ToArray();
-            EditorUtility.SetDirty(vp);
-        }
-
-        private static void Upsert(List<VRCExpressionParameters.Parameter> list, string name,
-            VRCExpressionParameters.ValueType type, float def, bool saved, bool synced)
-        {
-            var existing = list.Find(p => p.name == name);
-            if (existing != null)
-            {
-                existing.valueType = type;
-                existing.defaultValue = def;
-                existing.saved = saved;
-                existing.networkSynced = synced;
-                return;
-            }
-            list.Add(new VRCExpressionParameters.Parameter
-            {
-                name = name,
-                valueType = type,
-                defaultValue = def,
-                saved = saved,
-                networkSynced = synced,
-            });
-        }
-
-        // Expression Menu に PS_Enabled の ON/OFF トグルを追加する。
+        // Expression Menu(PS_Menu) を作り、MA Menu Installer で非破壊にインストールする。
         private void GenerateMenu()
         {
             EnsureFolder(GeneratedDir);
-
-            // PS_Enabled が無ければ同期パラメータを用意しておく
-            AddSyncedParameters();
-            AssetDatabase.SaveAssets();
 
             string menuPath = GeneratedDir + "/PS_Menu.asset";
             var psMenu = AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(menuPath);
@@ -280,66 +240,48 @@ namespace PersonalSpace.Editor
                 });
                 EditorUtility.SetDirty(psMenu);
             }
-
-            // Radial 用パラメータを用意し、メニューに Radial を追加
-            AddMenuTuningParams();
             AddRadial(psMenu, "反応範囲", PRange);
             AddRadial(psMenu, "押し出しの強さ", PGain);
             AddRadial(psMenu, "遅延補償の量", PLead);
 
-            // アバターのルートメニューに「Personal Space」サブメニューを差し込む
-            VRCExpressionsMenu root = _avatar.expressionsMenu;
-            if (root == null)
+            // 「Personal Space」サブメニューにまとめるラッパーを作る（root 直下が散らからないよう）
+            string rootPath = GeneratedDir + "/PS_MenuRoot.asset";
+            var psRoot = AssetDatabase.LoadAssetAtPath<VRCExpressionsMenu>(rootPath);
+            if (psRoot == null)
             {
-                root = CreateInstance<VRCExpressionsMenu>();
-                root.name = "PS_RootMenu";
-                root.controls = new List<VRCExpressionsMenu.Control>();
-                AssetDatabase.CreateAsset(root, GeneratedDir + "/PS_RootMenu.asset");
-                _avatar.expressionsMenu = root;
-                EditorUtility.SetDirty(_avatar);
+                psRoot = CreateInstance<VRCExpressionsMenu>();
+                psRoot.name = "PS_MenuRoot";
+                AssetDatabase.CreateAsset(psRoot, rootPath);
             }
-            if (root.controls == null)
-                root.controls = new List<VRCExpressionsMenu.Control>();
+            if (psRoot.controls == null)
+                psRoot.controls = new List<VRCExpressionsMenu.Control>();
+            if (!psRoot.controls.Exists(c =>
+                c.type == VRCExpressionsMenu.Control.ControlType.SubMenu && c.subMenu == psMenu))
+            {
+                psRoot.controls.Add(new VRCExpressionsMenu.Control
+                {
+                    name = "Personal Space",
+                    type = VRCExpressionsMenu.Control.ControlType.SubMenu,
+                    subMenu = psMenu,
+                });
+                EditorUtility.SetDirty(psRoot);
+            }
 
-            bool hasSub = root.controls.Exists(c =>
-                c.type == VRCExpressionsMenu.Control.ControlType.SubMenu && c.subMenu == psMenu);
-            if (!hasSub)
-            {
-                if (root.controls.Count >= 8)
-                {
-                    Debug.LogWarning("[PersonalSpace] ルートメニューが満杯(8)です。手動で PS_Menu を追加してください。");
-                }
-                else
-                {
-                    root.controls.Add(new VRCExpressionsMenu.Control
-                    {
-                        name = "Personal Space",
-                        type = VRCExpressionsMenu.Control.ControlType.SubMenu,
-                        subMenu = psMenu,
-                    });
-                    EditorUtility.SetDirty(root);
-                }
-            }
+            // MA で非破壊にメニュー＆パラメータを注入（FaceEmo 等と共存）
+            PersonalSpaceMA.CleanupLegacyExprParams(_avatar, "PS_");
+            PersonalSpaceMA.EnsureMenuInstaller(_avatar, psRoot);
+            PersonalSpaceMA.UpsertParameter(_avatar, PEnabled, ParameterSyncType.Bool,
+                localOnly: false, saved: true, def: _enabledDefault ? 1f : 0f);
+            // 反応範囲/強さ/遅延補償量: ローカル(非同期)。既定 範囲1.0, 強さ0.5, 遅延補償0.5
+            PersonalSpaceMA.UpsertParameter(_avatar, PRange, ParameterSyncType.Float,
+                localOnly: true, saved: true, def: 1.0f);
+            PersonalSpaceMA.UpsertParameter(_avatar, PGain, ParameterSyncType.Float,
+                localOnly: true, saved: true, def: 0.5f);
+            PersonalSpaceMA.UpsertParameter(_avatar, PLead, ParameterSyncType.Float,
+                localOnly: true, saved: true, def: 0.5f);
 
             AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] Expression Menu を生成/更新しました: " + menuPath);
-        }
-
-        // Radial 用の非同期パラメータ(反応範囲/強さ/遅延補償量)を Expression Parameters に追加。
-        private void AddMenuTuningParams()
-        {
-            VRCExpressionParameters vp = _avatar.expressionParameters;
-            if (vp == null) return; // AddSyncedParameters で必ず作られている前提
-            var list = new List<VRCExpressionParameters.Parameter>(
-                vp.parameters ?? new VRCExpressionParameters.Parameter[0]);
-
-            // 既定: 範囲=最大(1.0), 強さ=中(0.5→gain1.5), 遅延補償=中(0.5→lead1.0)
-            Upsert(list, PRange, VRCExpressionParameters.ValueType.Float, 1.0f, saved: true, synced: false);
-            Upsert(list, PGain, VRCExpressionParameters.ValueType.Float, 0.5f, saved: true, synced: false);
-            Upsert(list, PLead, VRCExpressionParameters.ValueType.Float, 0.5f, saved: true, synced: false);
-
-            vp.parameters = list.ToArray();
-            EditorUtility.SetDirty(vp);
         }
 
         private static void AddRadial(VRCExpressionsMenu menu, string label, string param)
@@ -370,16 +312,14 @@ namespace PersonalSpace.Editor
             if (AssetDatabase.IsValidFolder(AnimDir))
                 AssetDatabase.DeleteAsset(AnimDir);
 
-            VRCExpressionParameters vp = _avatar.expressionParameters;
-            if (vp != null && vp.parameters != null)
-            {
-                var list = new List<VRCExpressionParameters.Parameter>(vp.parameters);
-                list.RemoveAll(p => p.name == POffX || p.name == POffZ || p.name == PEnabled
-                                    || p.name == PRange || p.name == PGain || p.name == PLead);
-                vp.parameters = list.ToArray();
-                EditorUtility.SetDirty(vp);
-                AssetDatabase.SaveAssets();
-            }
+            // MA のメニュー/マージ＋このウィンドウのパラメータのみ除去（センサーは残す）
+            PersonalSpaceMA.RemoveComponentsOfType<ModularAvatarMenuInstaller>(_avatar);
+            PersonalSpaceMA.RemoveComponentsOfType<ModularAvatarMergeAnimator>(_avatar);
+            PersonalSpaceMA.RemoveParametersMatching(_avatar, n =>
+                n == PEnabled || n == POffX || n == POffZ || n == PRange || n == PGain || n == PLead);
+            PersonalSpaceMA.DestroyRootIfEmpty(_avatar);
+            PersonalSpaceMA.CleanupLegacyExprParams(_avatar, "PS_");
+            AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] リモートオフセットを削除しました");
         }
 

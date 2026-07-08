@@ -1,11 +1,10 @@
 #if VRC_SDK_VRCSDK3
 using System.Collections.Generic;
-using System.IO;
+using nadena.dev.modular_avatar.core;
 using UnityEditor;
 using UnityEngine;
 using VRC.Dynamics;
 using VRC.SDK3.Avatars.Components;
-using VRC.SDK3.Avatars.ScriptableObjects;
 using VRC.SDK3.Dynamics.Contact.Components;
 
 namespace PersonalSpace.Editor
@@ -127,47 +126,31 @@ namespace PersonalSpace.Editor
             Debug.Log($"[PersonalSpace] セットアップ完了: {_avatar.name} ({_sensorCount}方向)");
         }
 
+        // Modular Avatar 経由でセンサーパラメータ PS_0…PS_{N-1} を注入する
+        // （FaceEmo など NDMF 系ツールに消されないよう非破壊で）。
         private void AddParameters()
         {
-            VRCExpressionParameters vp = _avatar.expressionParameters;
-            if (vp == null)
-            {
-                vp = CreateInstance<VRCExpressionParameters>();
-                vp.parameters = new VRCExpressionParameters.Parameter[0];
-
-                const string dir = "Assets/PersonalSpace/Generated";
-                if (!AssetDatabase.IsValidFolder(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                    AssetDatabase.Refresh();
-                }
-                AssetDatabase.CreateAsset(vp, dir + "/PS_ExpressionParameters.asset");
-                _avatar.expressionParameters = vp;
-                EditorUtility.SetDirty(_avatar);
-                Debug.LogWarning("[PersonalSpace] Expression Parameters が未設定だったため新規作成しました: "
-                                 + dir + "/PS_ExpressionParameters.asset");
-            }
-
-            // 既存の PS_ パラメータをいったん除去してから追加（センサー数変更に追従）。
-            var list = new List<VRCExpressionParameters.Parameter>(
-                vp.parameters ?? new VRCExpressionParameters.Parameter[0]);
-            list.RemoveAll(p => p.name != null && p.name.StartsWith(ParamPrefix));
+            // 旧方式で直接足していた PS_ を掃除（重複防止）
+            PersonalSpaceMA.CleanupLegacyExprParams(_avatar, ParamPrefix);
+            // センサー数変更に追従: 既存のセンサー番号パラメータをいったん除去
+            PersonalSpaceMA.RemoveParametersMatching(_avatar, IsSensorParamName);
 
             for (int i = 0; i < _sensorCount; i++)
             {
-                list.Add(new VRCExpressionParameters.Parameter
-                {
-                    name = ParamPrefix + i,
-                    valueType = VRCExpressionParameters.ValueType.Float,
-                    defaultValue = 0f,
-                    saved = false,
-                    networkSynced = _sync,
-                });
+                PersonalSpaceMA.UpsertParameter(_avatar, ParamPrefix + i,
+                    ParameterSyncType.Float, localOnly: !_sync, saved: false, def: 0f);
             }
-
-            vp.parameters = list.ToArray();
-            EditorUtility.SetDirty(vp);
             AssetDatabase.SaveAssets();
+        }
+
+        // "PS_" + 数字 = センサーパラメータ
+        private static bool IsSensorParamName(string name)
+        {
+            if (name == null || !name.StartsWith(ParamPrefix)) return false;
+            string rest = name.Substring(ParamPrefix.Length);
+            if (rest.Length == 0) return false;
+            foreach (char c in rest) if (!char.IsDigit(c)) return false;
+            return true;
         }
 
         private void RemoveSetup()
@@ -177,16 +160,11 @@ namespace PersonalSpace.Editor
             {
                 Undo.DestroyObjectImmediate(root.gameObject);
             }
-
-            VRCExpressionParameters vp = _avatar.expressionParameters;
-            if (vp != null && vp.parameters != null)
-            {
-                var list = new List<VRCExpressionParameters.Parameter>(vp.parameters);
-                list.RemoveAll(p => p.name != null && p.name.StartsWith(ParamPrefix));
-                vp.parameters = list.ToArray();
-                EditorUtility.SetDirty(vp);
-                AssetDatabase.SaveAssets();
-            }
+            // 旧方式の残骸掃除 ＋ MA 側のセンサーパラメータ削除
+            PersonalSpaceMA.CleanupLegacyExprParams(_avatar, ParamPrefix);
+            PersonalSpaceMA.RemoveParametersMatching(_avatar, IsSensorParamName);
+            PersonalSpaceMA.DestroyRootIfEmpty(_avatar);
+            AssetDatabase.SaveAssets();
             Debug.Log("[PersonalSpace] 削除しました: " + _avatar.name);
         }
     }
