@@ -188,6 +188,8 @@ namespace PersonalSpace.Editor
                 PersonalSpaceRemote.GenerateMenu(_avatar, _enabledDefault, _includePush, _includeCloak);
                 if (_includePush)
                     PersonalSpaceRemote.GenerateRangeViz(_avatar, _radius);
+                if (_includeCloak)
+                    PersonalSpaceRemote.GenerateCloakViz(_avatar, _cloakDistance);
             }
 
             AssetDatabase.SaveAssets();

@@ -40,13 +40,16 @@ namespace PersonalSpace.Editor
         private const string PGain = "PS_Gain";    // 押し出しの強さ
         private const string PLead = "PS_Lead";    // 遅延補償の量
 
-        // 範囲の視覚表示（足元リング）
+        // 範囲の視覚表示（足元リング）。押し出し=イエロー / 透明化=シアン。
         private const string RangeCtrlPath = GeneratedDir + "/PS_RangeViz.controller";
         private const string RangeMatPath = GeneratedDir + "/PS_RangeViz.mat";
-        private const string RangeObj = "PS_RangeViz";   // 表示メッシュ(コンテナ配下)
-        private const string PShowRange = "PS_ShowRange"; // 範囲表示 ON/OFF
-        // アニメの参照パスはアバター root 相対（MA Merge Animator は Absolute）。
-        private static string RangeVizPath => PersonalSpaceMA.ContainerName + "/" + RangeObj;
+        private const string RangeObj = "PS_RangeViz";   // 押し出しの反応範囲リング(コンテナ配下)
+        private const string PShowRange = "PS_ShowRange"; // 反応範囲の表示 ON/OFF
+
+        private const string CloakVizCtrlPath = GeneratedDir + "/PS_CloakViz.controller";
+        private const string CloakVizMatPath = GeneratedDir + "/PS_CloakViz.mat";
+        private const string CloakVizObj = "PS_CloakViz"; // 透明化の距離リング(コンテナ配下)
+        private const string PShowCloak = "PS_ShowCloak"; // 透明化範囲の表示 ON/OFF
 
         // 透明化モード（近づかれたら他人視点で自分が消える）
         private const string CloakCtrlPath = GeneratedDir + "/PS_Cloak.controller";
@@ -292,6 +295,7 @@ namespace PersonalSpace.Editor
         {
             AddToggle(m, "透明化", PCloak);
             AddRadial(m, "透明化の距離", PCloakRange);
+            AddToggle(m, "範囲表示", PShowCloak);
             AddToggle(m, "自分からも消える", PCloakSelf);
         }
 
@@ -322,6 +326,10 @@ namespace PersonalSpace.Editor
                 AssetDatabase.DeleteAsset(RangeCtrlPath);
             if (AssetDatabase.LoadAssetAtPath<Material>(RangeMatPath) != null)
                 AssetDatabase.DeleteAsset(RangeMatPath);
+            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(CloakVizCtrlPath) != null)
+                AssetDatabase.DeleteAsset(CloakVizCtrlPath);
+            if (AssetDatabase.LoadAssetAtPath<Material>(CloakVizMatPath) != null)
+                AssetDatabase.DeleteAsset(CloakVizMatPath);
             string ringPath = GeneratedDir + "/PS_RingMesh.asset";
             if (AssetDatabase.LoadAssetAtPath<Mesh>(ringPath) != null)
                 AssetDatabase.DeleteAsset(ringPath);
@@ -329,25 +337,40 @@ namespace PersonalSpace.Editor
                 AssetDatabase.DeleteAsset(CloakCtrlPath);
         }
 
-        /// <summary>足元に反応範囲を示す半透明ディスクを生成し、PS_Range に連動させる（ローカル表示）。</summary>
+        /// <summary>押し出しの反応範囲リング（イエロー）。PS_Range に連動・自分のみ表示。</summary>
         public static void GenerateRangeViz(VRCAvatarDescriptor avatar, float maxRadius)
+        {
+            GenerateViz(avatar, RangeObj, RangeCtrlPath, RangeMatPath,
+                new Color(1f, 0.85f, 0.15f, 0.25f), PShowRange, PRange, maxRadius, 0.01f);
+        }
+
+        /// <summary>透明化の距離リング（シアン）。PS_CloakRange に連動・自分のみ表示。</summary>
+        public static void GenerateCloakViz(VRCAvatarDescriptor avatar, float maxDistance)
+        {
+            GenerateViz(avatar, CloakVizObj, CloakVizCtrlPath, CloakVizMatPath,
+                new Color(0.15f, 0.9f, 1f, 0.25f), PShowCloak, PCloakRange, maxDistance, 0.02f);
+        }
+
+        // 足元リングの共通生成。showParam(Bool・ローカル)ON かつ IsLocal のときだけ表示し、
+        // rangeParam(0..1)でサイズが実効半径 = maxRadius*(0.2+0.8*range) に連動する。
+        private static void GenerateViz(VRCAvatarDescriptor avatar, string objName, string ctrlPath,
+            string matPath, Color color, string showParam, string rangeParam, float maxRadius, float yOffset)
         {
             EnsureFolder(GeneratedDir);
             EnsureFolder(AnimDir);
 
-            // 表示メッシュ(コンテナ配下 PersonalSpace/PS_RangeViz)
             Transform container = PersonalSpaceMA.EnsureContainer(avatar);
-            Transform t = container.Find(RangeObj);
+            Transform t = container.Find(objName);
             GameObject go = t != null ? t.gameObject : null;
             if (go == null)
             {
-                go = new GameObject(RangeObj);
-                Undo.RegisterCreatedObjectUndo(go, "Create " + RangeObj);
+                go = new GameObject(objName);
+                Undo.RegisterCreatedObjectUndo(go, "Create " + objName);
                 go.transform.SetParent(container, false);
             }
-            go.transform.localPosition = new Vector3(0f, 0.01f, 0f);
+            go.transform.localPosition = new Vector3(0f, yOffset, 0f);
             go.transform.localRotation = Quaternion.identity;
-            go.transform.localScale = new Vector3(maxRadius, 0.005f, maxRadius); // 平たいプレビュー
+            go.transform.localScale = new Vector3(maxRadius, 0.005f, maxRadius);
             go.SetActive(true);
 
             var mf = go.GetComponent<MeshFilter>();
@@ -355,27 +378,28 @@ namespace PersonalSpace.Editor
             mf.sharedMesh = GetRingMesh();
             var mr = go.GetComponent<MeshRenderer>();
             if (mr == null) mr = Undo.AddComponent<MeshRenderer>(go);
-            mr.sharedMaterial = GetRangeMaterial();
+            mr.sharedMaterial = GetVizMaterial(matPath, color);
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             mr.receiveShadows = false;
 
-            // リングは外周半径0.5なので半径R には scale.xz = 2R。実効範囲 R = maxRadius*(0.2+0.8*PS_Range)
+            // リングは外周半径0.5なので半径R には scale.xz = 2R。実効範囲 R = maxRadius*(0.2+0.8*range)
             float sMin = 2f * maxRadius * 0.2f;
             float sMax = 2f * maxRadius * 1.0f;
             const float flatY = 0.005f;
+            string objPath = PersonalSpaceMA.ContainerName + "/" + objName;
 
-            AnimationClip off = MakeVizClip("PS_RangeViz_Off", false, sMin, flatY);
-            AnimationClip minC = MakeVizClip("PS_RangeViz_Min", true, sMin, flatY);
-            AnimationClip maxC = MakeVizClip("PS_RangeViz_Max", true, sMax, flatY);
+            AnimationClip off = MakeVizClip(objName + "_Off", objPath, false, sMin, flatY);
+            AnimationClip minC = MakeVizClip(objName + "_Min", objPath, true, sMin, flatY);
+            AnimationClip maxC = MakeVizClip(objName + "_Max", objPath, true, sMax, flatY);
 
-            if (File.Exists(RangeCtrlPath)) AssetDatabase.DeleteAsset(RangeCtrlPath);
-            var controller = AnimatorController.CreateAnimatorControllerAtPath(RangeCtrlPath);
+            if (File.Exists(ctrlPath)) AssetDatabase.DeleteAsset(ctrlPath);
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(ctrlPath);
             controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
-            controller.AddParameter(PShowRange, AnimatorControllerParameterType.Bool);
-            controller.AddParameter(PRange, AnimatorControllerParameterType.Float);
+            controller.AddParameter(showParam, AnimatorControllerParameterType.Bool);
+            controller.AddParameter(rangeParam, AnimatorControllerParameterType.Float);
 
             AnimatorControllerLayer[] layers = controller.layers;
-            layers[0].name = "PS_RangeViz";
+            layers[0].name = objName;
             controller.layers = layers;
             AnimatorStateMachine sm = controller.layers[0].stateMachine;
 
@@ -385,9 +409,9 @@ namespace PersonalSpace.Editor
 
             var tree = new BlendTree
             {
-                name = "PS_RangeTree",
+                name = objName + "_Tree",
                 blendType = BlendTreeType.Simple1D,
-                blendParameter = PRange,
+                blendParameter = rangeParam,
             };
             AssetDatabase.AddObjectToAsset(tree, controller);
             tree.children = new[]
@@ -398,28 +422,28 @@ namespace PersonalSpace.Editor
             var onState = sm.AddState("Shown");
             onState.motion = tree;
 
-            // Off -> Shown : ローカル かつ 範囲表示ON
+            // Off -> Shown : ローカル かつ 表示ON
             var toOn = offState.AddTransition(onState);
             toOn.hasExitTime = false; toOn.duration = 0f;
             toOn.AddCondition(AnimatorConditionMode.If, 0f, "IsLocal");
-            toOn.AddCondition(AnimatorConditionMode.If, 0f, PShowRange);
+            toOn.AddCondition(AnimatorConditionMode.If, 0f, showParam);
             // Shown -> Off : リモート化 or OFF
             var toOff1 = onState.AddTransition(offState);
             toOff1.hasExitTime = false; toOff1.duration = 0f;
             toOff1.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsLocal");
             var toOff2 = onState.AddTransition(offState);
             toOff2.hasExitTime = false; toOff2.duration = 0f;
-            toOff2.AddCondition(AnimatorConditionMode.IfNot, 0f, PShowRange);
+            toOff2.AddCondition(AnimatorConditionMode.IfNot, 0f, showParam);
 
             EditorUtility.SetDirty(controller);
 
             PersonalSpaceMA.EnsureMergeAnimator(avatar, controller);
-            PersonalSpaceMA.UpsertParameter(avatar, PShowRange, ParameterSyncType.Bool,
+            PersonalSpaceMA.UpsertParameter(avatar, showParam, ParameterSyncType.Bool,
                 localOnly: true, saved: true, def: 0f);
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
-            Debug.Log("[PersonalSpace] 範囲表示を生成しました: " + RangeCtrlPath);
+            Debug.Log("[PersonalSpace] 範囲表示を生成しました: " + ctrlPath);
         }
 
         /// <summary>透明化モード: 一定内に近づかれたら他人視点で自分のメッシュを非表示にする。</summary>
@@ -647,24 +671,27 @@ namespace PersonalSpace.Editor
             return mesh;
         }
 
-        private static Material GetRangeMaterial()
+        private static Material GetVizMaterial(string matPath, Color color)
         {
-            var mat = AssetDatabase.LoadAssetAtPath<Material>(RangeMatPath);
-            if (mat != null) return mat;
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
             Shader sh = Shader.Find("Sprites/Default") ?? Shader.Find("Unlit/Transparent");
-            mat = new Material(sh) { color = new Color(0.2f, 0.8f, 1f, 0.25f) };
-            AssetDatabase.CreateAsset(mat, RangeMatPath);
+            if (mat == null)
+            {
+                mat = new Material(sh);
+                AssetDatabase.CreateAsset(mat, matPath);
+            }
+            mat.color = color; // 既存でも色を上書き（黄/シアンの塗り替えに追従）
+            EditorUtility.SetDirty(mat);
             return mat;
         }
 
-        private static AnimationClip MakeVizClip(string clipName, bool active, float scaleXZ, float scaleY)
+        private static AnimationClip MakeVizClip(string clipName, string objPath, bool active, float scaleXZ, float scaleY)
         {
             var clip = new AnimationClip { name = clipName };
-            string p = RangeVizPath;
-            SetConstantTyped(clip, p, typeof(GameObject), "m_IsActive", active ? 1f : 0f);
-            SetConstantTyped(clip, p, typeof(Transform), "m_LocalScale.x", scaleXZ);
-            SetConstantTyped(clip, p, typeof(Transform), "m_LocalScale.y", scaleY);
-            SetConstantTyped(clip, p, typeof(Transform), "m_LocalScale.z", scaleXZ);
+            SetConstantTyped(clip, objPath, typeof(GameObject), "m_IsActive", active ? 1f : 0f);
+            SetConstantTyped(clip, objPath, typeof(Transform), "m_LocalScale.x", scaleXZ);
+            SetConstantTyped(clip, objPath, typeof(Transform), "m_LocalScale.y", scaleY);
+            SetConstantTyped(clip, objPath, typeof(Transform), "m_LocalScale.z", scaleXZ);
             string path = AnimDir + "/" + clipName + ".anim";
             if (File.Exists(path)) AssetDatabase.DeleteAsset(path);
             AssetDatabase.CreateAsset(clip, path);
