@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""VRChat の起動を監視して、GUI が未起動なら自動で立ち上げる常駐ウォッチャ（ウィンドウ無し）。
+"""VRChat の起動/終了を監視して、GUI を自動で立ち上げ／終了させる常駐ウォッチャ（ウィンドウ無し）。
 
 - Windows のスタートアップに登録して使う（GUI の「Windows起動時に自動起動」トグルが登録する）。
 - VRChat.exe を数秒ごとに確認し、起動していて かつ GUI がまだ動いていなければ
   personal_space_gui.py を --autostart 付きで起動する（GUI は起動と同時に OSC を開始）。
+- VRChat が終了したら、このウォッチャが起動した GUI に QUIT を送って一緒に閉じる
+  （手動で開いた GUI は巻き込まない＝ウォッチャが立ち上げた分だけ閉じる）。
 - GUI の起動有無は GUI が握る単一インスタンス用ポート(GUI_PORT)への接続可否で判定する。
 - このウォッチャ自身も単一インスタンス（二重常駐しない）。
 
@@ -65,15 +67,37 @@ def _launch_gui():
         pass
 
 
+def _quit_gui():
+    """GUI(単一インスタンスポート)に QUIT を送って閉じてもらう。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as c:
+            c.settimeout(0.5)
+            if c.connect_ex(("127.0.0.1", GUI_PORT)) == 0:
+                c.sendall(b"QUIT")
+    except Exception:
+        pass
+
+
 def main():
     lock = _single_instance(WATCH_PORT)
     if lock is None:
         return  # 既にウォッチャが常駐している
+    launched_by_us = False  # このウォッチャが GUI を起動したか（終了連動の対象を限定）
+    prev_vrc = False        # 前回ポーリング時に VRChat が起動していたか
     while True:
         try:
-            if _vrchat_running() and not _port_open(GUI_PORT):
+            vrc = _vrchat_running()
+            gui_up = _port_open(GUI_PORT)
+            if vrc and not gui_up:
+                # VRChat 起動中で GUI 未起動 → 立ち上げる
                 _launch_gui()
-                time.sleep(10.0)  # 起動直後に GUI がポートを握るまで待って二重起動を防ぐ
+                launched_by_us = True
+                time.sleep(10.0)  # GUI がポートを握るまで待って二重起動を防ぐ
+            elif prev_vrc and not vrc and gui_up and launched_by_us:
+                # VRChat が起動→終了に変化 → 自分が立てた GUI を閉じる
+                _quit_gui()
+                launched_by_us = False
+            prev_vrc = vrc
         except Exception:
             pass
         time.sleep(POLL_SEC)

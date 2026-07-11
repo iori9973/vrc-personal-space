@@ -15,6 +15,7 @@ import queue
 import socket
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
@@ -112,6 +113,7 @@ class App:
 
         self.log_queue = queue.Queue()
         self.worker = None
+        self._quit_requested = False  # ウォッチャからの QUIT を受けたら True（_poll で閉じる）
 
         pad = {"padx": 8, "pady": 4}
 
@@ -241,6 +243,12 @@ class App:
 
     # ---- 表示更新 ----
     def _poll(self):
+        # ウォッチャから終了指示（VRChat 終了連動）が来ていたら閉じる
+        if self._quit_requested:
+            self._append_log("VRChat が終了したためアプリを閉じます。")
+            self.on_close()
+            return
+
         # ログを吐き出す
         while True:
             try:
@@ -287,6 +295,30 @@ class App:
                             pass
 
 
+def _start_control_listener(lock_sock, app):
+    """単一インスタンス用ポートで待ち受け、ウォッチャからの "QUIT"（VRChat 終了連動）を受けたら
+    GUI に終了を要求する。GUI 起動検知の接続（データ無し）は無視する。"""
+    def loop():
+        while True:
+            try:
+                conn, _ = lock_sock.accept()
+            except OSError:
+                return  # ソケットが閉じられた（アプリ終了）
+            try:
+                conn.settimeout(0.5)
+                data = conn.recv(64) or b""
+                if data.strip().upper().startswith(b"QUIT"):
+                    app._quit_requested = True  # Tk スレッドの _poll が拾って閉じる
+            except Exception:
+                pass
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    threading.Thread(target=loop, daemon=True).start()
+
+
 def main():
     ap = argparse.ArgumentParser(description="VRChat Personal Space GUI")
     ap.add_argument("--autostart", action="store_true",
@@ -301,6 +333,7 @@ def main():
     root = tk.Tk()
     app = App(root, autostart=args.autostart)
     app._lock = lock  # ライフタイム保持（GC で閉じないように）
+    _start_control_listener(lock, app)  # VRChat 終了連動の QUIT を受ける
     root.mainloop()
 
 
