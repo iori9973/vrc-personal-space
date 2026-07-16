@@ -484,16 +484,45 @@ namespace PersonalSpace.Editor
             recv.localOnly = false;
             EditorUtility.SetDirty(recv);
 
-            // アバターの全 Renderer を列挙して 表示/非表示 クリップを作る（PS_ 自前オブジェクトは除外）
+            // 表示/非表示クリップ。隠し方は「Hips をゼロスケールで潰す」方式。
+            // 【重要】全 Renderer の m_Enabled=0（非表示）にすると、VRChat がそのアバターを
+            // 「見えていない」と判断して “他人のクライアント側で” FX アニメーターを停止(カリング)する。
+            // すると Hidden→Visible の復帰遷移が実行されず、相手が離れても消えたまま張り付く
+            // （自分視点＝ローカルは停止しないので戻る／リセットで戻る、という症状になる）。
+            // レンダラーは有効のまま Hips スケールで隠せば、アニメーターが動き続けるので確実に戻る。
             var visible = new AnimationClip { name = "PS_Cloak_Visible" };
             var hidden = new AnimationClip { name = "PS_Cloak_Hidden" };
-            foreach (Renderer r in avatar.GetComponentsInChildren<Renderer>(true))
+            var cloakAnimator = avatar.GetComponent<Animator>();
+            Transform cloakHips = (cloakAnimator != null && cloakAnimator.isHuman)
+                ? cloakAnimator.GetBoneTransform(HumanBodyBones.Hips) : null;
+            if (cloakHips != null)
             {
-                if (IsUnderPSObject(r.transform, avatar.transform)) continue;
-                string path = AnimationUtility.CalculateTransformPath(r.transform, avatar.transform);
-                System.Type rt = r.GetType();
-                SetConstantTyped(visible, path, rt, "m_Enabled", 1f);
-                SetConstantTyped(hidden, path, rt, "m_Enabled", 0f);
+                // Hips を潰すと、その配下ボーンにスキンした全メッシュが一点に collapse して不可視になる。
+                // 厳密に 0 だと PhysBone 等で NaN が出て戻した後に壊れることがあるため極小値にする。
+                const float tiny = 0.0001f; // 事実上不可視（元の 1/10000）だが非ゼロ
+                string hipsPath = AnimationUtility.CalculateTransformPath(cloakHips, avatar.transform);
+                Vector3 s = cloakHips.localScale; // 元スケール(通常 1)を保持して戻す
+                SetConstantTyped(visible, hipsPath, typeof(Transform), "m_LocalScale.x", s.x);
+                SetConstantTyped(visible, hipsPath, typeof(Transform), "m_LocalScale.y", s.y);
+                SetConstantTyped(visible, hipsPath, typeof(Transform), "m_LocalScale.z", s.z);
+                SetConstantTyped(hidden, hipsPath, typeof(Transform), "m_LocalScale.x", tiny);
+                SetConstantTyped(hidden, hipsPath, typeof(Transform), "m_LocalScale.y", tiny);
+                SetConstantTyped(hidden, hipsPath, typeof(Transform), "m_LocalScale.z", tiny);
+            }
+            else
+            {
+                // 非ヒューマノイド等で Hips が取れない場合のみ従来の m_Enabled 方式にフォールバック
+                // （この場合はリモートで戻らないカリング制約が残る点に注意）。
+                Debug.LogWarning("[PersonalSpace] Hips が見つからないため透明化を m_Enabled 方式にフォールバックします"
+                    + "（他人視点で戻らない既知の制約があります）。");
+                foreach (Renderer r in avatar.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (IsUnderPSObject(r.transform, avatar.transform)) continue;
+                    string path = AnimationUtility.CalculateTransformPath(r.transform, avatar.transform);
+                    System.Type rt = r.GetType();
+                    SetConstantTyped(visible, path, rt, "m_Enabled", 1f);
+                    SetConstantTyped(hidden, path, rt, "m_Enabled", 0f);
+                }
             }
             SaveClipAsset(visible, animDir, "PS_Cloak_Visible");
             SaveClipAsset(hidden, animDir, "PS_Cloak_Hidden");
