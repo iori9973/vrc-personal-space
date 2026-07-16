@@ -1,6 +1,6 @@
 {
   "name": "com.vrc-personal-space",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "displayName": "Personal Space",
   "description": "他プレーヤーが一定距離より近づくと、自分だけが相手から離れてパーソナルスペースを保つ VRChat 用ツール。アバターの Contacts で接近を検知し、付属の OSC アプリで自動回避する。",
   "unity": "2022.3",

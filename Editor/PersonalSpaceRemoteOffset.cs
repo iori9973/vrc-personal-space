@@ -54,7 +54,7 @@ namespace PersonalSpace.Editor
 
         // 透明化モード（近づかれたら他人視点で自分が消える）
         private const string NearObj = "PS_NearSensor";   // 近接検知用の受信機
-        private const string PNear = "PS_Near";           // 一定内に誰かいる(同期Bool)
+        private const string PNear = "PS_Near";           // 一定内に誰かいる(ローカルBool・各自判定)
         private const string PCloak = "PS_CloakMode";     // 透明化モード ON/OFF(同期Bool)
         private const string PCloakRange = "PS_CloakRange"; // 透明化の距離(Radial・ローカル)
         private const string PCloakSelf = "PS_CloakSelf";   // 自分視点でも消す(ローカル・非同期)
@@ -451,7 +451,7 @@ namespace PersonalSpace.Editor
             EnsureFolder(dir);
             EnsureFolder(animDir);
 
-            // 近接検知の受信機(PS_NearSensor)。Constant型で「一定内に誰かいる」を PS_Near(同期)に。
+            // 近接検知の受信機(PS_NearSensor)。Constant型で「一定内に誰かいる」を PS_Near(ローカル)に。
             Transform container = PersonalSpaceMA.EnsureContainer(avatar);
             Transform ns = container.Find(NearObj);
             GameObject nso = ns != null ? ns.gameObject : null;
@@ -476,9 +476,11 @@ namespace PersonalSpace.Editor
             recv.collisionTags = new List<string>(BodyTags);
             recv.allowSelf = false;
             recv.allowOthers = true;
-            // Local Only を OFF にする。ON だと PS_Near が同期されず他人視点で消せないため。
-            // （所有者の検知結果が同期パラメータ経由で全リモートへ伝わる。受信機1個なのでランク影響は軽微）
-            recv.localOnly = false;
+            // Local Only を ON にする。各クライアントが自分の描画するCの近接をローカルで判定し、
+            // そのローカル PS_Near で C の透明化アニメを駆動する（SPS等と同じローカル判定方式）。
+            // 同期方式だと「離れた瞬間の 1→0」が取りこぼされ他人視点で消えたまま張り付くため
+            // （VRChat は変化時のみ同期）、ローカル判定に変更して張り付きを解消する。
+            recv.localOnly = true;
             EditorUtility.SetDirty(recv);
 
             // アバターの全 Renderer を列挙して 表示/非表示 クリップを作る（PS_ 自前オブジェクトは除外）
@@ -572,8 +574,9 @@ namespace PersonalSpace.Editor
             EditorUtility.SetDirty(controller);
 
             PersonalSpaceMA.EnsureMergeAnimator(avatar, controller);
+            // PS_Near はローカル判定（各クライアントが自前で計算）なので非同期にする。
             PersonalSpaceMA.UpsertParameter(avatar, PNear, ParameterSyncType.Bool,
-                localOnly: false, saved: false, def: 0f);
+                localOnly: true, saved: false, def: 0f);
             PersonalSpaceMA.UpsertParameter(avatar, PCloak, ParameterSyncType.Bool,
                 localOnly: false, saved: true, def: 0f);
             // 透明化の距離(ローカル)。既定 1.0=最大。メニュー未生成でもこの既定で動く。
