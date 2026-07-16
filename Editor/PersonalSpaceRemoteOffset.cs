@@ -54,7 +54,7 @@ namespace PersonalSpace.Editor
 
         // 透明化モード（近づかれたら他人視点で自分が消える）
         private const string NearObj = "PS_NearSensor";   // 近接検知用の受信機
-        private const string PNear = "PS_Near";           // 一定内に誰かいる(ローカルBool・各自判定)
+        private const string PNear = "PS_Near";           // 近接の距離(同期Float・Proximity 0..1)
         private const string PCloak = "PS_CloakMode";     // 透明化モード ON/OFF(同期Bool)
         private const string PCloakRange = "PS_CloakRange"; // 透明化の距離(Radial・ローカル)
         private const string PCloakSelf = "PS_CloakSelf";   // 自分視点でも消す(ローカル・非同期)
@@ -451,7 +451,7 @@ namespace PersonalSpace.Editor
             EnsureFolder(dir);
             EnsureFolder(animDir);
 
-            // 近接検知の受信機(PS_NearSensor)。Constant型で「一定内に誰かいる」を PS_Near(ローカル)に。
+            // 近接検知の受信機(PS_NearSensor)。Proximity型で近接距離を PS_Near(同期Float)に。
             Transform container = PersonalSpaceMA.EnsureContainer(avatar);
             Transform ns = container.Find(NearObj);
             GameObject nso = ns != null ? ns.gameObject : null;
@@ -471,16 +471,17 @@ namespace PersonalSpace.Editor
             recv.height = 3.0f;
             recv.position = Vector3.zero;
             recv.rotation = Quaternion.identity;
-            recv.receiverType = ContactReceiver.ReceiverType.Constant; // 0/1
+            // Proximity(距離・連続値0..1)にする。Constant(0/1)だと「離れた瞬間の 1→0」が1回きりの
+            // 同期変化になり、それが取りこぼされると他人視点で消えたまま張り付いた（VRChat は変化時同期）。
+            // Proximity は離れる過程で値が連続的に下がり同期更新が多数出るため、0付近まで確実に伝わり張り付きに強い。
+            recv.receiverType = ContactReceiver.ReceiverType.Proximity; // 0..1(中心=1, 外縁=0)
             recv.parameter = PNear;
             recv.collisionTags = new List<string>(BodyTags);
             recv.allowSelf = false;
             recv.allowOthers = true;
-            // Local Only を ON にする。各クライアントが自分の描画するCの近接をローカルで判定し、
-            // そのローカル PS_Near で C の透明化アニメを駆動する（SPS等と同じローカル判定方式）。
-            // 同期方式だと「離れた瞬間の 1→0」が取りこぼされ他人視点で消えたまま張り付くため
-            // （VRChat は変化時のみ同期）、ローカル判定に変更して張り付きを解消する。
-            recv.localOnly = true;
+            // Local Only は OFF（同期）。ON だと所有者クライアントでしか PS_Near が立たず、
+            // 他人視点で透明化がトリガーされない（＝機能しない）。他人から消すには同期が必須。
+            recv.localOnly = false;
             EditorUtility.SetDirty(recv);
 
             // アバターの全 Renderer を列挙して 表示/非表示 クリップを作る（PS_ 自前オブジェクトは除外）
@@ -501,7 +502,7 @@ namespace PersonalSpace.Editor
             var controller = AnimatorController.CreateAnimatorControllerAtPath(cloakCtrlPath);
             controller.AddParameter("IsLocal", AnimatorControllerParameterType.Bool);
             controller.AddParameter(PCloak, AnimatorControllerParameterType.Bool);
-            controller.AddParameter(PNear, AnimatorControllerParameterType.Bool);
+            controller.AddParameter(PNear, AnimatorControllerParameterType.Float);
             controller.AddParameter(PCloakRange, AnimatorControllerParameterType.Float);
             controller.AddParameter(PCloakSelf, AnimatorControllerParameterType.Bool);
 
@@ -516,18 +517,22 @@ namespace PersonalSpace.Editor
             var hidState = sm.AddState("Hidden");
             hidState.motion = hidden;
 
+            // PS_Near は Proximity(0..1)。近い＝値が大きい。ヒステリシスで境界のちらつきを防ぐ：
+            // 隠す=0.15超え / 戻す=0.08未満。値の間に不感帯を設けることで往復フリッカを抑える。
+            const float hideAbove = 0.15f; // これより近い(値が大きい)と隠す
+            const float showBelow = 0.08f; // これより遠い(値が小さい)と戻す
             // 消える条件 = 透明化ON かつ 近い かつ (他人視点 または 自分からも消すON)。
             // Visible -> Hidden : 他人視点で消す（従来）
             var toHideRemote = visState.AddTransition(hidState);
             toHideRemote.hasExitTime = false; toHideRemote.duration = 0f;
             toHideRemote.AddCondition(AnimatorConditionMode.If, 0f, PCloak);
-            toHideRemote.AddCondition(AnimatorConditionMode.If, 0f, PNear);
+            toHideRemote.AddCondition(AnimatorConditionMode.Greater, hideAbove, PNear);
             toHideRemote.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsLocal");
             // Visible -> Hidden : 「自分からも消える」ON なら自分視点(IsLocal)でも消す
             var toHideSelf = visState.AddTransition(hidState);
             toHideSelf.hasExitTime = false; toHideSelf.duration = 0f;
             toHideSelf.AddCondition(AnimatorConditionMode.If, 0f, PCloak);
-            toHideSelf.AddCondition(AnimatorConditionMode.If, 0f, PNear);
+            toHideSelf.AddCondition(AnimatorConditionMode.Greater, hideAbove, PNear);
             toHideSelf.AddCondition(AnimatorConditionMode.If, 0f, PCloakSelf);
             // Hidden -> Visible : 消える条件が崩れたら戻す
             var s1 = hidState.AddTransition(visState);
@@ -535,7 +540,7 @@ namespace PersonalSpace.Editor
             s1.AddCondition(AnimatorConditionMode.IfNot, 0f, PCloak);
             var s2 = hidState.AddTransition(visState);
             s2.hasExitTime = false; s2.duration = 0f;
-            s2.AddCondition(AnimatorConditionMode.IfNot, 0f, PNear);
+            s2.AddCondition(AnimatorConditionMode.Less, showBelow, PNear);
             // 自分視点 かつ 自分からも消すOFF のとき見える（他人視点はこの遷移を取らない）
             var s3 = hidState.AddTransition(visState);
             s3.hasExitTime = false; s3.duration = 0f;
@@ -574,9 +579,9 @@ namespace PersonalSpace.Editor
             EditorUtility.SetDirty(controller);
 
             PersonalSpaceMA.EnsureMergeAnimator(avatar, controller);
-            // PS_Near はローカル判定（各クライアントが自前で計算）なので非同期にする。
-            PersonalSpaceMA.UpsertParameter(avatar, PNear, ParameterSyncType.Bool,
-                localOnly: true, saved: false, def: 0f);
+            // PS_Near は所有者が近接距離(Proximity)を判定し、同期で全クライアントへ伝える(他人から消すため)。
+            PersonalSpaceMA.UpsertParameter(avatar, PNear, ParameterSyncType.Float,
+                localOnly: false, saved: false, def: 0f);
             PersonalSpaceMA.UpsertParameter(avatar, PCloak, ParameterSyncType.Bool,
                 localOnly: false, saved: true, def: 0f);
             // 透明化の距離(ローカル)。既定 1.0=最大。メニュー未生成でもこの既定で動く。
