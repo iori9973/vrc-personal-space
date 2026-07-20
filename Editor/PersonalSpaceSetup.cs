@@ -359,8 +359,11 @@ namespace PersonalSpace.Editor
             {
                 var sender = go.AddComponent<VRCContactSender>();
                 sender.shapeType = ContactBase.ShapeType.Sphere;
-                sender.radius = 0.3f;
-                sender.position = new Vector3(0f, 1.0f, 0f); // 概ね胸の高さ
+                // オフセット0＝この GameObject を置いた場所そのものに検知球が出る。
+                // アバター直下でもアクセサリ内でも「置いた位置」で反応するので配置を選ばない。
+                // 受信機は縦カプセル(高さ3m)なので多少の高さズレは拾える。半径は少し大きめで寛容に。
+                sender.radius = 0.5f;
+                sender.position = Vector3.zero;
                 sender.rotation = Quaternion.identity;
                 sender.collisionTags = new List<string> { tag };
 
@@ -371,7 +374,9 @@ namespace PersonalSpace.Editor
                 EditorUtility.RevealInFinder(path);
                 EditorUtility.DisplayDialog("Personal Space",
                     "通行証アイテムを書き出しました:\n" + path +
-                    "\n\nこの Prefab を通す相手に渡し、相手のアバター直下にドラッグしてもらってください。" +
+                    "\n\nこの Prefab を通す相手に渡し、相手のアバターに入れてもらってください。" +
+                    "\nアバター直下でも、アクセサリの中に入れてもOK（置いた位置に検知球が出ます）。" +
+                    "体の中心近く（胸〜腰あたり）だと確実です。" +
                     "\n合言葉「" + _passPhrase + "」でこちらの受信機と一致します（合言葉が違うと通りません）。" +
                     "\n合言葉を変えたら、こちらも同じ合言葉でセットアップし直してください。", "OK");
             }
