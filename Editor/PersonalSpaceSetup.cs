@@ -43,9 +43,18 @@ namespace PersonalSpace.Editor
         private bool _enabledDefault = true;  // メニュー ON/OFF の初期値
         private float _cloakDistance = 0.6f;  // 透明化する接近距離(m)
 
+        // 通行証（特定アイテム所持者は押し出さない）。押し出しのサブ機能。
+        private bool _includePass = false;      // 通行証を通す機能を使う
+        private string _passPhrase = "friends"; // 合言葉（受信機と配布Prefabで一致させる）
+
         private const string SensorsName = "Sensors";                    // コンテナ配下のセンサー親
+        private const string PassSensorsName = "PassSensors";            // 通行証センサーの親
         private const string LegacySensorsRoot = "PersonalSpaceSensors"; // 旧レイアウト(直下)掃除用
         private const string ParamPrefix = "PS_";
+        private const string PassParamPrefix = "PS_Pass"; // PS_Pass0..N-1（方向別の通行証検知）
+
+        // 配布用の通行証アイテム Prefab の出力先
+        private const string PassItemDir = "Assets/PersonalSpace/Generated/PassItems";
 
         // 全ヒューマノイドアバターに自動生成される Contact Sender のタグ。
         private static readonly List<string> BodyTags = new List<string>
@@ -79,6 +88,13 @@ namespace PersonalSpace.Editor
                 _includeOffset = EditorGUILayout.Toggle("　遅延補償を含める", _includeOffset);
                 using (new EditorGUI.DisabledScope(!_includeOffset))
                     _lead = EditorGUILayout.Slider("　　最大リード距離 (m)", _lead, 0.05f, 0.6f);
+
+                _includePass = EditorGUILayout.Toggle("　通行証を通す（特定アイテム所持者）", _includePass);
+                using (new EditorGUI.DisabledScope(!_includePass))
+                {
+                    _passPhrase = EditorGUILayout.TextField("　　合言葉", _passPhrase);
+                    if (GUILayout.Button("　　通行証アイテム(Prefab)を書き出す")) ExportPassItem();
+                }
             }
             _includeCloak = EditorGUILayout.Toggle("透明化機能（近づかれたら消える）", _includeCloak);
             using (new EditorGUI.DisabledScope(!_includeCloak))
@@ -174,10 +190,16 @@ namespace PersonalSpace.Editor
             // controls が空で保存される AssetDatabase 競合を避けるため）。
             TearDown(full: false);
 
+            bool passOn = _includePush && _includePass;
             if (_includePush)
             {
                 CreateSensors();
                 AddParameters();
+                if (passOn)
+                {
+                    CreatePassSensors();
+                    AddPassParameters();
+                }
                 if (_includeOffset)
                     PersonalSpaceRemote.GenerateOffset(_avatar, _lead, _enabledDefault);
             }
@@ -185,7 +207,7 @@ namespace PersonalSpace.Editor
                 PersonalSpaceRemote.GenerateCloak(_avatar, _cloakDistance);
             if (_includeMenu && (_includePush || _includeCloak))
             {
-                PersonalSpaceRemote.GenerateMenu(_avatar, _enabledDefault, _includePush, _includeCloak);
+                PersonalSpaceRemote.GenerateMenu(_avatar, _enabledDefault, _includePush, _includeCloak, passOn);
                 if (_includePush)
                     PersonalSpaceRemote.GenerateRangeViz(_avatar, _radius);
                 if (_includeCloak)
@@ -194,7 +216,8 @@ namespace PersonalSpace.Editor
 
             AssetDatabase.SaveAssets();
             Debug.Log($"[PersonalSpace] セットアップ完了: {_avatar.name} "
-                      + (_includePush ? "押し出し " : "") + (_includeCloak ? "透明化 " : ""));
+                      + (_includePush ? "押し出し " : "") + (passOn ? "通行証 " : "")
+                      + (_includeCloak ? "透明化 " : ""));
         }
 
         // 放射状に N 個の Contact Receiver(縦カプセル・Proximity) を生成する
@@ -251,6 +274,121 @@ namespace PersonalSpace.Editor
                     ParameterSyncType.Float, localOnly: !_sync, saved: false, def: 0f);
             }
             AssetDatabase.SaveAssets();
+        }
+
+        // 合言葉から通行証タグを作る（受信機・配布Prefab で一致させる文字列）
+        private static string PassTag(string phrase)
+        {
+            string p = (phrase ?? "").Trim();
+            if (p.Length == 0) p = "default";
+            return "PSPass_" + p;
+        }
+
+        // 押し出しセンサーと同じ放射状に、通行証専用タグを検知する受信機 PS_Pass0…PS_Pass{N-1} を生成。
+        // 押し出しセンサーと同方向に置くので、通行証所持者がいる方向だけをアプリ側で打ち消せる。
+        private void CreatePassSensors()
+        {
+            Transform container = PersonalSpaceMA.EnsureContainer(_avatar);
+            var rootGo = new GameObject(PassSensorsName);
+            Undo.RegisterCreatedObjectUndo(rootGo, "Create PersonalSpace PassSensors");
+            rootGo.transform.SetParent(container, false);
+            Transform root = rootGo.transform;
+            root.localPosition = new Vector3(0f, _height, 0f);
+
+            string tag = PassTag(_passPhrase);
+            for (int i = 0; i < _sensorCount; i++)
+            {
+                float theta = 2f * Mathf.PI * i / _sensorCount;
+                var dir = new Vector3(Mathf.Sin(theta), 0f, Mathf.Cos(theta));
+
+                var childGo = new GameObject(PassParamPrefix + i);
+                Undo.RegisterCreatedObjectUndo(childGo, "Create PersonalSpace pass sensor");
+                childGo.transform.SetParent(root, false);
+                childGo.transform.localPosition = dir * _offset;
+
+                var recv = Undo.AddComponent<VRCContactReceiver>(childGo);
+                recv.shapeType = ContactBase.ShapeType.Capsule;
+                recv.radius = _radius;
+                recv.height = 3.0f;
+                recv.position = Vector3.zero;
+                recv.rotation = Quaternion.identity;
+                recv.receiverType = ContactReceiver.ReceiverType.Proximity;
+                recv.parameter = PassParamPrefix + i;
+                recv.collisionTags = new List<string> { tag };
+                recv.allowSelf = false;
+                recv.allowOthers = true;
+                recv.localOnly = true;
+                EditorUtility.SetDirty(recv);
+            }
+        }
+
+        // 通行証センサーのパラメータ PS_Pass0…PS_Pass{N-1}（ローカル・OSC出力）を注入する。
+        // （PS_PassMode（メニュートグル）は GenerateMenu 側で登録する）
+        private void AddPassParameters()
+        {
+            PersonalSpaceMA.RemoveParametersMatching(_avatar, IsPassSensorParamName);
+            for (int i = 0; i < _sensorCount; i++)
+            {
+                PersonalSpaceMA.UpsertParameter(_avatar, PassParamPrefix + i,
+                    ParameterSyncType.Float, localOnly: true, saved: false, def: 0f);
+            }
+            AssetDatabase.SaveAssets();
+        }
+
+        // "PS_Pass" + 数字 = 通行証センサーパラメータ（"PS_PassMode" は数字でないので対象外）
+        private static bool IsPassSensorParamName(string name)
+        {
+            if (name == null || !name.StartsWith(PassParamPrefix)) return false;
+            string rest = name.Substring(PassParamPrefix.Length);
+            if (rest.Length == 0) return false;
+            foreach (char c in rest) if (!char.IsDigit(c)) return false;
+            return true;
+        }
+
+        // 配布用の通行証アイテム Prefab を書き出す。
+        // 中身は合言葉タグを仕込んだ VRCContactSender 1 個だけ。相手はこれをアバター直下に置くだけ。
+        private void ExportPassItem()
+        {
+            string tag = PassTag(_passPhrase);
+            EnsureAssetFolder(PassItemDir);
+
+            string safe = tag.Replace("PSPass_", "");
+            foreach (char c in Path.GetInvalidFileNameChars()) safe = safe.Replace(c, '_');
+            var go = new GameObject("PSPassItem_" + safe);
+            try
+            {
+                var sender = go.AddComponent<VRCContactSender>();
+                sender.shapeType = ContactBase.ShapeType.Sphere;
+                sender.radius = 0.3f;
+                sender.position = new Vector3(0f, 1.0f, 0f); // 概ね胸の高さ
+                sender.rotation = Quaternion.identity;
+                sender.collisionTags = new List<string> { tag };
+
+                string path = AssetDatabase.GenerateUniqueAssetPath(PassItemDir + "/" + go.name + ".prefab");
+                GameObject prefab = PrefabUtility.SaveAsPrefabAsset(go, path);
+                AssetDatabase.SaveAssets();
+                EditorGUIUtility.PingObject(prefab);
+                EditorUtility.RevealInFinder(path);
+                EditorUtility.DisplayDialog("Personal Space",
+                    "通行証アイテムを書き出しました:\n" + path +
+                    "\n\nこの Prefab を通す相手に渡し、相手のアバター直下にドラッグしてもらってください。" +
+                    "\n合言葉「" + _passPhrase + "」でこちらの受信機と一致します（合言葉が違うと通りません）。" +
+                    "\n合言葉を変えたら、こちらも同じ合言葉でセットアップし直してください。", "OK");
+            }
+            finally
+            {
+                DestroyImmediate(go);
+            }
+        }
+
+        // Assets 配下のフォルダを（親から順に）確実に作る。
+        private static void EnsureAssetFolder(string path)
+        {
+            if (AssetDatabase.IsValidFolder(path)) return;
+            string parent = Path.GetDirectoryName(path).Replace('\\', '/');
+            string leaf = Path.GetFileName(path);
+            if (!AssetDatabase.IsValidFolder(parent)) EnsureAssetFolder(parent);
+            AssetDatabase.CreateFolder(parent, leaf);
         }
 
         // "PS_" + 数字 = センサーパラメータ

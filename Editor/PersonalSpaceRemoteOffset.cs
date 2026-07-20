@@ -40,6 +40,7 @@ namespace PersonalSpace.Editor
         private const string POffX = "PS_OffX";
         private const string POffZ = "PS_OffZ";
         private const string PEnabled = "PS_Enabled";
+        private const string PPassMode = "PS_PassMode"; // 通行証は通す ON/OFF（メニュー・ローカル）
 
         // メニュー(Radial)で実行時調整する値。ローカルのみ効くので非同期。
         private const string PRange = "PS_Range";  // 反応範囲
@@ -174,7 +175,7 @@ namespace PersonalSpace.Editor
 
         /// <summary>Expression Menu(PS_Menu) を作り、MA Menu Installer で非破壊インストールする。</summary>
         public static void GenerateMenu(VRCAvatarDescriptor avatar, bool enabledDefault,
-                                        bool includePush, bool includeCloak)
+                                        bool includePush, bool includeCloak, bool includePass = false)
         {
             string dir = DirFor(avatar);
             EnsureFolder(dir);
@@ -188,7 +189,7 @@ namespace PersonalSpace.Editor
                 // 両方 ON: 「押し出し」「透明化」のサブページに分ける
                 var pushMenu = LoadOrCreateMenu(dir + "/PS_MenuPush.asset", "PS_MenuPush");
                 pushMenu.controls = new List<VRCExpressionsMenu.Control>();
-                AddPushControls(pushMenu);
+                AddPushControls(pushMenu, includePass);
                 EditorUtility.SetDirty(pushMenu);
 
                 var cloakMenu = LoadOrCreateMenu(dir + "/PS_MenuCloak.asset", "PS_MenuCloak");
@@ -202,7 +203,7 @@ namespace PersonalSpace.Editor
             else if (includePush)
             {
                 // 片方だけなら無駄な階層を作らず直接並べる
-                AddPushControls(psMenu);
+                AddPushControls(psMenu, includePass);
             }
             else if (includeCloak)
             {
@@ -236,6 +237,10 @@ namespace PersonalSpace.Editor
                     localOnly: true, saved: true, def: 0.5f);
                 PersonalSpaceMA.UpsertParameter(avatar, PShowRange, ParameterSyncType.Bool,
                     localOnly: true, saved: true, def: 0f);
+                // 通行証は通す: ローカル(非同期・OSC アプリが読む)。既定 OFF
+                if (includePass)
+                    PersonalSpaceMA.UpsertParameter(avatar, PPassMode, ParameterSyncType.Bool,
+                        localOnly: true, saved: true, def: 0f);
             }
             if (includeCloak)
             {
@@ -276,7 +281,7 @@ namespace PersonalSpace.Editor
             };
         }
 
-        private static void AddPushControls(VRCExpressionsMenu m)
+        private static void AddPushControls(VRCExpressionsMenu m, bool includePass)
         {
             m.controls.Add(new VRCExpressionsMenu.Control
             {
@@ -289,6 +294,8 @@ namespace PersonalSpace.Editor
             AddRadial(m, "押し出しの強さ", PGain);
             AddRadial(m, "遅延補償の量", PLead);
             AddToggle(m, "範囲表示", PShowRange);
+            if (includePass)
+                AddToggle(m, "通行証は通す", PPassMode);
         }
 
         private static void AddCloakControls(VRCExpressionsMenu m)

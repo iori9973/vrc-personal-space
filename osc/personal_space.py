@@ -97,6 +97,9 @@ STATUS_RUNNING = "running"      # パラメータ受信中(動作中)
 STATUS_NO_VRCHAT = "no_vrchat"  # VRChat 未検出(フォールバック送信)
 STATUS_ERROR = "error"          # 起動失敗
 
+# 通行証センサー(PS_Pass*)がこの値を超えたら、その方向は通行証所持者ありと判定して押し出さない
+PASS_THRESHOLD = 0.05
+
 
 class PersonalSpaceWorker:
     """OSC 受信〜移動送信のループを 1 本のワーカースレッドで回す。
@@ -181,7 +184,9 @@ class PersonalSpaceWorker:
         escape_dirs = _build_escape_dirs(n)
 
         state = [0.0] * n
+        pass_state = [0.0] * n  # 通行証センサー PS_Pass0..N-1(方向別・0..1)
         enabled = {"v": True}   # メニュー PS_Enabled。既定 ON(未受信でも動く)
+        pass_mode = {"v": False}  # メニュー PS_PassMode。ON なら通行証所持者の方向は押し出さない
         lock = threading.Lock()
         got_any = {"v": False}
 
@@ -198,11 +203,29 @@ class PersonalSpaceWorker:
                     got_any["v"] = True
             return handler
 
+        def make_pass_handler(idx):
+            def handler(_address, *osc_args):
+                if not osc_args:
+                    return
+                try:
+                    value = float(osc_args[0])
+                except (TypeError, ValueError):
+                    return
+                with lock:
+                    pass_state[idx] = value
+            return handler
+
         def enabled_handler(_address, *osc_args):
             if not osc_args:
                 return
             with lock:
                 enabled["v"] = bool(osc_args[0])
+
+        def passmode_handler(_address, *osc_args):
+            if not osc_args:
+                return
+            with lock:
+                pass_mode["v"] = bool(osc_args[0])
 
         tuning = {"range": None, "gain": None, "lead": None}
 
@@ -221,7 +244,9 @@ class PersonalSpaceWorker:
         dispatcher = Dispatcher()
         for i in range(n):
             dispatcher.map(f"/avatar/parameters/PS_{i}", make_handler(i))
+            dispatcher.map(f"/avatar/parameters/PS_Pass{i}", make_pass_handler(i))
         dispatcher.map("/avatar/parameters/PS_Enabled", enabled_handler)
+        dispatcher.map("/avatar/parameters/PS_PassMode", passmode_handler)
         dispatcher.map("/avatar/parameters/PS_Range", make_tuning_handler("range"))
         dispatcher.map("/avatar/parameters/PS_Gain", make_tuning_handler("gain"))
         dispatcher.map("/avatar/parameters/PS_Lead", make_tuning_handler("lead"))
@@ -281,7 +306,9 @@ class PersonalSpaceWorker:
             while not self._stop.is_set():
                 with lock:
                     values = list(state)
+                    pass_values = list(pass_state)
                     is_enabled = enabled["v"]
+                    pass_on = pass_mode["v"]
                     received = got_any["v"]
                     t_range, t_gain, t_lead = tuning["range"], tuning["gain"], tuning["lead"]
 
@@ -310,6 +337,9 @@ class PersonalSpaceWorker:
                 for i in range(n):
                     w = values[i]
                     if w <= cutoff or denom <= 0.0:
+                        continue
+                    # 通行証モード: この方向に通行証所持者がいれば押し出さない（方向別キャンセル）
+                    if pass_on and pass_values[i] > PASS_THRESHOLD:
                         continue
                     w = (w - cutoff) / denom
                     dx, dz = escape_dirs[i]
